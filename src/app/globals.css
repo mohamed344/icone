@@ -1,26 +1,253 @@
 @import "tailwindcss";
 
+/* ============================================================
+   DESIGN TOKENS — flat white + sky-blue, no gradients.
+   Driven live by the ThemeProvider (accent, background, mode, …).
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Accent — sky blue, set live by ThemeProvider. No second gradient stop. */
+  --accent: #0ea5e9;
+  --accent-2: var(--accent);
+  --accent-soft: color-mix(in oklab, var(--accent) 12%, transparent);
+  --accent-contrast: #ffffff;
+
+  /* Surfaces & text (light) — page background overridden by the bg preset */
+  --bg: #ffffff;
+  --bg-2: #f4f7fb;
+  --surface: #ffffff;
+  --surface-2: #f5f8fc;
+  --foreground: #0f172a;
+  --muted: #51607a;
+  --faint: #94a3b8;
+  --border: #e5e9f0;
+
+  /* Card surface helpers (flat — solid white, hairline border, soft shadow) */
+  --glass: var(--surface);
+  --glass-2: var(--surface-2);
+  --glass-border: var(--border);
+  --glass-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 30px -16px rgba(15, 23, 42, 0.12);
+  --ring: color-mix(in oklab, var(--accent) 40%, transparent);
+
+  /* Shape & motion */
+  --radius: 1.25rem;
+  --radius-sm: 0.75rem;
+  --radius-lg: 1.75rem;
+
+  /* Density scale (comfortable default) — toggled via [data-density] */
+  --card-pad: 1.5rem;
+  --section-gap: 1.5rem;
+  --row-pad: 0.875rem;
+  --control-h: 2.75rem;
+  --text-scale: 1;
+
+  /* Font — ThemeProvider points this at a loaded next/font variable */
+  --app-font: var(--font-geist-sans), system-ui, sans-serif;
 }
 
+[data-theme="dark"] {
+  --bg: #0b1220;
+  --bg-2: #0e1626;
+  --surface: #111a2b;
+  --surface-2: #15213a;
+  --foreground: #e8eef7;
+  --muted: #9fb0c7;
+  --faint: #6b7c95;
+  --border: rgba(255, 255, 255, 0.08);
+
+  --glass: var(--surface);
+  --glass-2: var(--surface-2);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px -16px rgba(0, 0, 0, 0.55);
+}
+
+[data-density="compact"] {
+  --card-pad: 1.05rem;
+  --section-gap: 1rem;
+  --row-pad: 0.6rem;
+  --control-h: 2.4rem;
+  --text-scale: 0.95;
+}
+
+/* Map tokens into Tailwind's theme so utilities resolve them */
 @theme inline {
-  --color-background: var(--background);
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-contrast: var(--accent-contrast);
+
+  --radius-app: var(--radius);
+  --radius-app-sm: var(--radius-sm);
+  --radius-app-lg: var(--radius-lg);
+
+  --font-sans: var(--app-font);
+  --font-display: var(--font-display), var(--app-font);
+  --font-mono: var(--font-geist-mono), monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ============================================================
+   BASE
+   ============================================================ */
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  font-size: calc(100% * var(--text-scale));
 }
 
 body {
-  background: var(--background);
+  background: var(--bg);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--app-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* Interactive elements get a pointer; disabled controls don't. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+label:has(> input[type="checkbox"]),
+summary,
+a[href] {
+  cursor: pointer;
+}
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Slim, themed scrollbar */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted) 28%, transparent);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--accent) 50%, transparent);
+  background-clip: content-box;
+}
+
+/* ============================================================
+   SURFACES — flat cards (solid, hairline border, soft shadow)
+   ============================================================ */
+
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+.glass-2 {
+  background: var(--surface-2);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
+}
+
+/* Accent helpers — now SOLID (no gradients) */
+.bg-accent-gradient {
+  background: var(--accent);
+}
+.text-gradient {
+  color: var(--accent);
+}
+.glow {
+  box-shadow: 0 6px 16px -10px rgba(15, 23, 42, 0.22);
+}
+.ring-accent:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* ----- Gradient style — opt-in via Settings (data-style="gradient") ----- */
+[data-style="gradient"] .bg-accent-gradient {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+[data-style="gradient"] .text-gradient {
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+[data-style="gradient"] .glow {
+  box-shadow: 0 10px 36px -12px color-mix(in oklab, var(--accent) 50%, transparent);
+}
+
+/* ============================================================
+   MICRO-INTERACTIONS
+   ============================================================ */
+
+.hover-lift {
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px -16px rgba(15, 23, 42, 0.2);
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up {
+  animation: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 2.4s ease-in-out infinite;
+}
+
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+/* Stagger helper: set --i on children for cascading entrance */
+.stagger > * {
+  animation: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+/* RTL: mirror directional glyphs/icons that imply motion */
+[dir="rtl"] .flip-rtl {
+  transform: scaleX(-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
