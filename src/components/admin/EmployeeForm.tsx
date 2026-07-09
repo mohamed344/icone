@@ -1,15 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useT, type DictKey } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { saveEmployee, type EmployeeState } from "@/app/(app)/admin/employees/actions";
 import { ROLES, WORKFLOW_STAGES, USER_STATUSES, type Role, type WorkflowStage } from "@/lib/workflow";
-import { UserPlus, Pencil, AlertCircle, ArrowLeft } from "lucide-react";
+import { UserPlus, Pencil, AlertCircle, ArrowLeft, Check, Plus } from "lucide-react";
 
 export interface EmployeeInitial {
   id: string;
@@ -20,11 +21,43 @@ export interface EmployeeInitial {
   allowed_stations: WorkflowStage[] | null;
 }
 
-function StationChip({ value, label, checked }: { value: string; label: string; checked: boolean }) {
+function StationChip({
+  value,
+  label,
+  on,
+  onToggle,
+}: {
+  value: string;
+  label: string;
+  on: boolean;
+  onToggle: (next: boolean) => void;
+}) {
   return (
-    <label className="cursor-pointer">
-      <input type="checkbox" name="allowed_stations" value={value} defaultChecked={checked} className="peer sr-only" />
-      <span className="inline-flex select-none items-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-medium text-muted transition-all peer-checked:border-transparent peer-checked:bg-accent-gradient peer-checked:text-[var(--accent-contrast)]">
+    <label className="cursor-pointer" aria-pressed={on}>
+      <input
+        type="checkbox"
+        name="allowed_stations"
+        value={value}
+        checked={on}
+        onChange={(e) => onToggle(e.target.checked)}
+        className="sr-only"
+      />
+      <span
+        className={cn(
+          "inline-flex select-none items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all",
+          on
+            ? "border-transparent bg-emerald-500 text-white shadow-sm shadow-emerald-500/30 hover:bg-emerald-600"
+            : "border-dashed border-[var(--border)] bg-[var(--surface-2)] text-muted hover:border-[var(--accent)] hover:text-foreground",
+        )}
+      >
+        <span
+          className={cn(
+            "grid h-4 w-4 place-items-center rounded-full",
+            on ? "bg-white/25" : "border border-current opacity-60",
+          )}
+        >
+          {on ? <Check className="h-3 w-3" strokeWidth={3} /> : <Plus className="h-3 w-3" />}
+        </span>
         {label}
       </span>
     </label>
@@ -54,7 +87,16 @@ export function EmployeeForm({
     }
   }, [state, router]);
 
-  const seedStations = new Set(initial?.allowed_stations ?? []);
+  const [activeStations, setActiveStations] = useState<Set<string>>(
+    () => new Set(initial?.allowed_stations ?? []),
+  );
+  const toggleStation = (value: string, next: boolean) =>
+    setActiveStations((prev) => {
+      const copy = new Set(prev);
+      if (next) copy.add(value);
+      else copy.delete(value);
+      return copy;
+    });
   const field =
     "ring-accent w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 text-sm text-foreground focus:border-[var(--accent)] h-[var(--control-h)]";
 
@@ -135,11 +177,31 @@ export function EmployeeForm({
 
           {/* Allowed stations (postes autorisés) */}
           <div>
-            <span className="mb-1 block text-sm font-medium text-muted">{t("emp.stations")}</span>
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-sm font-medium text-muted">{t("emp.stations")}</span>
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                  activeStations.size > 0
+                    ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                    : "bg-[var(--surface-2)] text-faint",
+                )}
+              >
+                {activeStations.size > 0
+                  ? `${activeStations.size} / ${WORKFLOW_STAGES.length}`
+                  : t("emp.stationsNone")}
+              </span>
+            </div>
             <p className="mb-2 text-xs text-faint">{t("emp.stationsHint")}</p>
             <div className="flex flex-wrap gap-2">
               {WORKFLOW_STAGES.map((s) => (
-                <StationChip key={s} value={s} label={t(`stage.${s}` as DictKey)} checked={seedStations.has(s)} />
+                <StationChip
+                  key={s}
+                  value={s}
+                  label={t(`stage.${s}` as DictKey)}
+                  on={activeStations.has(s)}
+                  onToggle={(next) => toggleStation(s, next)}
+                />
               ))}
             </div>
           </div>
