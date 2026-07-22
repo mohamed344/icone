@@ -79,9 +79,9 @@ export default function SettingsPage() {
         </Button>
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Controls */}
-        <div className="flex flex-col gap-4 lg:col-span-2">
+        <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <Section icon={<Palette className="h-5 w-5" />} title={t("settings.accent")} hint={t("settings.accentHint")}>
             <div className="flex flex-wrap gap-3">
               {ACCENT_PRESETS.map((a) => (
@@ -185,7 +185,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Live preview */}
-        <div className="lg:col-span-1">
+        <div className="min-w-0 lg:col-span-1">
           <div className="lg:sticky lg:top-[5.5rem]">
             <GlassCard className="flex flex-col gap-4">
               <div className="flex items-center justify-between">

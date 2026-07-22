@@ -230,6 +230,23 @@ button:disabled,
   animation: pulse-soft 2.4s ease-in-out infinite;
 }
 
+/* Toast entrance (slides in from the trailing edge) + auto-dismiss bar */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(18px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.animate-toast-in {
+  animation: toast-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes toast-bar {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+.animate-toast-bar {
+  transform-origin: left;
+  animation: toast-bar 7s linear forwards;
+}
+
 @keyframes spin-slow {
   to { transform: rotate(360deg); }
 }
@@ -249,5 +266,13 @@ button:disabled,
   * {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* Print: when a printable label is on screen (in a portaled modal), hide the
+   whole app so only the label prints — on a single page, no blank pages. */
+@media print {
+  body:has(#print-label) #app-shell {
+    display: none !important;
   }
 }

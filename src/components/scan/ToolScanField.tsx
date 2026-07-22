@@ -1,67 +1,96 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useT } from "@/lib/i18n";
-import { Button } from "@/components/ui/Button";
+import { cn } from "@/lib/cn";
 import { Keyboard, Loader2 } from "lucide-react";
 
 /**
- * Physical-scanner input: a debounced textarea that finalizes ~90ms after the
- * tool goes idle (handles multi-keystroke scans), clears + refocuses after each.
+ * Physical-scanner input: a textarea that AUTO-SUBMITS each scan — no button.
+ * It finalizes the moment the scanner sends Enter, or ~200ms after the scan
+ * burst goes idle (so guns with no Enter suffix still submit on their own).
+ * Clears + refocuses after each scan. `autoFocus` grabs focus when it becomes
+ * the active field; `disabled` greys it out while it's not the operator's turn.
  */
 export function ToolScanField({
   onScan,
   busy = false,
   placeholder,
+  autoFocus = true,
+  disabled = false,
 }: {
   onScan: (code: string) => void;
   busy?: boolean;
   placeholder?: string;
+  autoFocus?: boolean;
+  disabled?: boolean;
 }) {
   const t = useT();
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const timerRef = useRef<number | null>(null);
 
-  function finalize() {
+  // Focus when this field becomes the active one (autoFocus true & enabled).
+  useEffect(() => {
+    if (autoFocus && !disabled) taRef.current?.focus();
+  }, [autoFocus, disabled]);
+
+  // Cancel any pending finalize on unmount.
+  useEffect(() => () => clearTimer(), []);
+
+  function clearTimer() {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+  }
+
+  function finalize() {
+    clearTimer();
     const el = taRef.current;
     const raw = el?.value ?? "";
     if (el) el.value = "";
-    onScan(raw);
+    if (raw.trim()) onScan(raw);
     el?.focus();
   }
 
+  function scheduleFinalize(delay: number) {
+    clearTimer();
+    timerRef.current = window.setTimeout(finalize, delay);
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+    // The scanner's Enter terminator → submit right away.
     if (e.key === "Enter") {
       e.preventDefault();
-      timerRef.current = window.setTimeout(finalize, 90);
+      scheduleFinalize(60);
     }
   }
 
+  // Auto-submit shortly after the scan characters stop arriving (no Enter needed).
+  function onChange() {
+    scheduleFinalize(200);
+  }
+
   return (
-    <div className="flex items-end gap-2">
-      <div className="relative flex-1">
-        <Keyboard className="pointer-events-none absolute start-3 top-3.5 h-4 w-4 text-faint" />
-        <textarea
-          ref={taRef}
-          rows={1}
-          onKeyDown={onKeyDown}
-          placeholder={placeholder ?? t("scan.scanHere")}
-          autoFocus
-          spellCheck={false}
-          className="ring-accent min-h-[2.75rem] w-full resize-none rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-2.5 ps-10 pe-4 font-mono text-sm text-foreground placeholder:text-faint focus:border-[var(--accent)]"
-        />
-      </div>
-      <Button onClick={finalize} disabled={busy}>
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("scan.record")}
-      </Button>
+    <div className="relative">
+      <Keyboard className="pointer-events-none absolute start-5 top-1/2 h-6 w-6 -translate-y-1/2 text-faint" />
+      <textarea
+        ref={taRef}
+        rows={1}
+        wrap="off"
+        onKeyDown={onKeyDown}
+        onChange={onChange}
+        placeholder={placeholder ?? t("scan.scanHere")}
+        disabled={disabled}
+        spellCheck={false}
+        className={cn(
+          "ring-accent h-20 w-full resize-none overflow-hidden truncate rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-6 ps-14 pe-14 font-mono text-xl text-foreground placeholder:text-faint focus:border-[var(--accent)]",
+          disabled && "cursor-not-allowed opacity-50",
+        )}
+      />
+      {busy && (
+        <Loader2 className="absolute end-5 top-1/2 h-6 w-6 -translate-y-1/2 animate-spin text-[var(--accent)]" />
+      )}
     </div>
   );
 }

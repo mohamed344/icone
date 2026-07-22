@@ -17,7 +17,7 @@ export function OperatorScan({ stages }: { stages: WorkflowStage[] }) {
           {t("op.noStation")}
         </Badge>
       ) : (
-        <Scanner stages={stages} lockEntity />
+        <Scanner stages={stages} />
       )}
     </>
   );

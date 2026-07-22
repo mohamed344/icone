@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright (auth tokens + test artifacts — must not be committed)
+tests/.auth/
+test-results/
+playwright-report/

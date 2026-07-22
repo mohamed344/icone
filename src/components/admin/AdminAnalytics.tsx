@@ -5,8 +5,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AreaChart } from "@/components/charts/AreaChart";
 import { BarChart } from "@/components/charts/BarChart";
-import type { ScanStats } from "@/lib/admin/stats";
-import { Activity, Timer, TrendingUp, Crown } from "lucide-react";
+import type { ScanStats, StockStats } from "@/lib/admin/stats";
+import { Activity, Timer, TrendingUp, Crown, Warehouse, Package, Layers, PackageCheck } from "lucide-react";
 
 function Tile({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
@@ -22,7 +22,7 @@ function Tile({ icon, label, value }: { icon: React.ReactNode; label: string; va
   );
 }
 
-export function AdminAnalytics({ stats }: { stats: ScanStats }) {
+export function AdminAnalytics({ stats, stock }: { stats: ScanStats; stock: StockStats }) {
   const t = useT();
 
   const busiest = [...stats.perStep].sort((a, b) => b.count - a.count)[0];
@@ -38,6 +38,13 @@ export function AdminAnalytics({ stats }: { stats: ScanStats }) {
         <Tile icon={<Timer className="h-5 w-5" />} label={t("stats.avgGap")} value={`${stats.avgGapMin} ${t("stats.minutesShort")}`} />
         <Tile icon={<TrendingUp className="h-5 w-5" />} label={t("stats.busiestStep")} value={busiest ? t(`stage.${busiest.stage}` as DictKey) : "—"} />
         <Tile icon={<Crown className="h-5 w-5" />} label={t("stats.topEmployee")} value={topEmp ? topEmp.name : "—"} />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile icon={<Warehouse className="h-5 w-5" />} label={t("stats.inStock")} value={stock.inStock.toLocaleString()} />
+        <Tile icon={<Package className="h-5 w-5" />} label={t("stats.cartons")} value={stock.cartons.toLocaleString()} />
+        <Tile icon={<Layers className="h-5 w-5" />} label={t("stats.pallets")} value={stock.pallets.toLocaleString()} />
+        <Tile icon={<PackageCheck className="h-5 w-5" />} label={t("stats.stockedToday")} value={stock.enteredToday.toLocaleString()} />
       </div>
 
       <GlassCard>

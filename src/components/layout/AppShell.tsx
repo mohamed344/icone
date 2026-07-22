@@ -13,27 +13,23 @@ export interface ShellUser {
   email: string;
   role: Role;
   initials: string;
+  /** Delegated: can re-approve rejected cartons (surfaces that nav item). */
+  canApproveRejected?: boolean;
 }
 
-/** The dashboard frame: aurora field + role-aware sidebar + topbar + content. */
+/** The dashboard frame: aurora field + overlay sidebar (closed by default) +
+ * topbar + content. The sidebar opens only when the topbar menu button is used. */
 export function AppShell({ children, user }: { children: React.ReactNode; user: ShellUser }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <NotificationsProvider userId={user.id}>
-      <div className="relative min-h-screen">
+      <div id="app-shell" className="relative min-h-screen">
         <div className="flex min-h-screen">
-          <Sidebar
-            user={user}
-            collapsed={collapsed}
-            onToggleCollapse={() => setCollapsed((c) => !c)}
-            mobileOpen={mobileOpen}
-            onNavigate={() => setMobileOpen(false)}
-          />
+          <Sidebar user={user} mobileOpen={menuOpen} onNavigate={() => setMenuOpen(false)} />
 
           <div className="flex min-w-0 flex-1 flex-col">
-            <Topbar user={user} onOpenMobile={() => setMobileOpen(true)} />
+            <Topbar user={user} onOpenMobile={() => setMenuOpen(true)} />
             <main
               className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 lg:px-8"
               style={{ display: "flex", flexDirection: "column", gap: "var(--section-gap)" }}

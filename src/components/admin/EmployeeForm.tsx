@@ -9,8 +9,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { saveEmployee, type EmployeeState } from "@/app/(app)/admin/employees/actions";
-import { ROLES, WORKFLOW_STAGES, USER_STATUSES, type Role, type WorkflowStage } from "@/lib/workflow";
-import { UserPlus, Pencil, AlertCircle, ArrowLeft, Check, Plus } from "lucide-react";
+import { ROLES, WORKFLOW_STAGES, USER_STATUSES, type Role, type WorkflowStage, type PermissionMap } from "@/lib/workflow";
+import { UserPlus, Pencil, AlertCircle, ArrowLeft, Check, Plus, ShieldCheck } from "lucide-react";
 
 export interface EmployeeInitial {
   id: string;
@@ -19,6 +19,7 @@ export interface EmployeeInitial {
   role: Role;
   status: string;
   allowed_stations: WorkflowStage[] | null;
+  permissions?: PermissionMap | null;
 }
 
 function StationChip({
@@ -87,6 +88,9 @@ export function EmployeeForm({
     }
   }, [state, router]);
 
+  const [approveRejected, setApproveRejected] = useState<boolean>(
+    () => Boolean(initial?.permissions?.approve_rejected),
+  );
   const [activeStations, setActiveStations] = useState<Set<string>>(
     () => new Set(initial?.allowed_stations ?? []),
   );
@@ -204,6 +208,27 @@ export function EmployeeForm({
                 />
               ))}
             </div>
+          </div>
+
+          {/* Delegated permissions */}
+          <div>
+            <div className="mb-1 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-[var(--accent)]" />
+              <span className="text-sm font-medium text-muted">{t("emp.permissions")}</span>
+            </div>
+            <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+              <input
+                type="checkbox"
+                name="approve_rejected"
+                checked={approveRejected}
+                onChange={(e) => setApproveRejected(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground">{t("perm.approve_rejected")}</span>
+                <span className="block text-xs text-faint">{t("emp.approveRejectedHint")}</span>
+              </span>
+            </label>
           </div>
 
           <div className="flex gap-2 pt-2">

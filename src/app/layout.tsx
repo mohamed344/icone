@@ -21,7 +21,7 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "Icon — Production Traceability & Quality Control",
+  title: "Icone — Production Traceability & Quality Control",
   description:
     "Scan-based traceability and quality control for production lines, from container creation to stock entry.",
 };

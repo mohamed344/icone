@@ -9,27 +9,26 @@ import { navForRole } from "./nav-config";
 import { signOut } from "@/app/(auth)/actions";
 import { Avatar } from "@/components/ui/Avatar";
 import type { ShellUser } from "./AppShell";
-import { PanelLeftClose, PanelLeftOpen, LogOut } from "lucide-react";
+import { LogOut, X } from "lucide-react";
 
 interface SidebarProps {
   user: ShellUser;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
   mobileOpen: boolean;
   onNavigate: () => void;
 }
 
-export function Sidebar({ user, collapsed, onToggleCollapse, mobileOpen, onNavigate }: SidebarProps) {
+export function Sidebar({ user, mobileOpen, onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const t = useT();
-  const nav = navForRole(user.role);
+  const nav = navForRole(user.role, user.canApproveRejected);
+  const collapsed = false;
 
   return (
     <>
       <div
         onClick={onNavigate}
         className={cn(
-          "fixed inset-0 z-30 bg-black/40 backdrop-blur-sm transition-opacity lg:hidden",
+          "fixed inset-0 z-30 bg-black/40 backdrop-blur-sm transition-opacity",
           mobileOpen ? "opacity-100" : "pointer-events-none opacity-0",
         )}
         aria-hidden
@@ -37,10 +36,8 @@ export function Sidebar({ user, collapsed, onToggleCollapse, mobileOpen, onNavig
 
       <aside
         className={cn(
-          "glass fixed inset-y-0 z-40 flex flex-col border-e border-[var(--glass-border)] transition-all duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0",
-          collapsed ? "w-[5.25rem]" : "w-[17rem]",
-          "start-0",
-          mobileOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full lg:translate-x-0",
+          "glass fixed inset-y-0 z-40 flex w-[17rem] flex-col border-e border-[var(--glass-border)] transition-transform duration-300 start-0",
+          mobileOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full",
         )}
       >
         {/* Brand */}
@@ -53,14 +50,19 @@ export function Sidebar({ user, collapsed, onToggleCollapse, mobileOpen, onNavig
             priority
             className="h-10 w-10 shrink-0 object-contain"
           />
-          {!collapsed && (
-            <div className="min-w-0">
-              <div className="font-display text-lg font-semibold leading-none text-foreground">
-                {t("app.name")}
-              </div>
-              <div className="mt-1 truncate text-xs text-faint">{t("app.tagline")}</div>
+          <div className="min-w-0">
+            <div className="font-display text-lg font-semibold leading-none text-foreground">
+              {t("app.name")}
             </div>
-          )}
+            <div className="mt-1 truncate text-xs text-faint">{t("app.tagline")}</div>
+          </div>
+          <button
+            onClick={onNavigate}
+            className="ring-accent ms-auto grid h-9 w-9 shrink-0 place-items-center rounded-xl text-faint transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+            aria-label={t("common.close")}
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         {/* Nav */}
@@ -107,41 +109,24 @@ export function Sidebar({ user, collapsed, onToggleCollapse, mobileOpen, onNavig
           ))}
         </nav>
 
-        {/* Footer: account + sign out + collapse */}
+        {/* Footer: account + sign out */}
         <div className="border-t border-[var(--glass-border)] p-3">
-          <div className={cn("flex items-center gap-3 rounded-2xl p-2", collapsed && "justify-center")}>
+          <div className="flex items-center gap-3 rounded-2xl p-2">
             <Avatar initials={user.initials} hue={265} presence="online" size="sm" />
-            {!collapsed && (
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground">{user.name}</div>
-                <div className="truncate text-xs text-faint">{t(`role.${user.role}`)}</div>
-              </div>
-            )}
-            {!collapsed && (
-              <form action={signOut}>
-                <button
-                  type="submit"
-                  className="ring-accent grid h-8 w-8 place-items-center rounded-xl text-faint transition-colors hover:text-[var(--accent)]"
-                  title={t("common.signOut")}
-                >
-                  <LogOut className="h-4 w-4 flip-rtl" />
-                </button>
-              </form>
-            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-foreground">{user.name}</div>
+              <div className="truncate text-xs text-faint">{t(`role.${user.role}`)}</div>
+            </div>
+            <form action={signOut}>
+              <button
+                type="submit"
+                className="ring-accent grid h-8 w-8 place-items-center rounded-xl text-faint transition-colors hover:text-[var(--accent)]"
+                title={t("common.signOut")}
+              >
+                <LogOut className="h-4 w-4 flip-rtl" />
+              </button>
+            </form>
           </div>
-          <button
-            onClick={onToggleCollapse}
-            className="ring-accent mt-1 hidden w-full items-center justify-center gap-2 rounded-2xl py-2 text-xs font-medium text-faint transition-colors hover:bg-[var(--accent-soft)] hover:text-foreground lg:flex"
-          >
-            {collapsed ? (
-              <PanelLeftOpen className="h-4 w-4 flip-rtl" />
-            ) : (
-              <>
-                <PanelLeftClose className="h-4 w-4 flip-rtl" />
-                <span>Collapse</span>
-              </>
-            )}
-          </button>
         </div>
       </aside>
     </>

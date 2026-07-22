@@ -1,12 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { recordScan } from "@/app/(app)/scan/actions";
-import { STAGE_ENTITY, ENTITY_TYPES, type EntityType, type WorkflowStage } from "@/lib/workflow";
+import { useEffect, useRef, useState } from "react";
+import { recordScan, getTodayStageScans } from "@/app/(app)/scan/actions";
+import { STAGE_ENTITY, type EntityType, type WorkflowStage } from "@/lib/workflow";
 import { parseScan, type ScanField } from "@/lib/scan/parse-scan";
+import { seqScanErrorMessage } from "@/lib/scan/scan-error";
 import { useT, type DictKey } from "@/lib/i18n";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { cn } from "@/lib/cn";
 import {
@@ -31,22 +31,18 @@ interface ScanRow {
 interface ScannerProps {
   /** Stations this user may scan. One → locked; many → a step picker appears. */
   stages: WorkflowStage[];
-  entityType?: EntityType;
-  /** Operators: lock the entity to the step's default so the screen stays focused. */
-  lockEntity?: boolean;
 }
 
-export function Scanner({ stages, entityType = "item", lockEntity = false }: ScannerProps) {
+export function Scanner({ stages }: ScannerProps) {
   const t = useT();
   const [stageSel, setStageSel] = useState<WorkflowStage>(stages[0] ?? "container_creation");
   const stageLabel = t(`stage.${stageSel}` as DictKey);
-  const [entity, setEntity] = useState<EntityType>(entityType);
-  const effectiveEntity: EntityType = lockEntity ? STAGE_ENTITY[stageSel] : entity;
+  // Entity type is derived automatically from the selected step (audit-only field).
+  const effectiveEntity: EntityType = STAGE_ENTITY[stageSel];
   const canSelectStage = stages.length > 1;
-  const enableQr = stageSel === "container_creation"; // Scan BF
+  const enableQr = stageSel === "container_creation"; // Scan PCBA (step one)
 
   const [busy, setBusy] = useState(false);
-  const [hasText, setHasText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [carteMere, setCarteMere] = useState<ScanField[] | null>(null);
@@ -55,8 +51,28 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const timerRef = useRef<number | null>(null);
 
+  // Load today's scans for the selected station so the log survives navigation.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const today = await getTodayStageScans(stageSel);
+      if (cancelled) return;
+      setRows(
+        today.map((r) => ({
+          code: r.code,
+          at: new Date(r.at).toLocaleTimeString(),
+          ok: !["fail", "non_conform", "rejected"].includes(r.result),
+          kind: "barcode" as const,
+        })),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stageSel]);
+
   function pushRow(row: ScanRow) {
-    setRows((r) => [row, ...r].slice(0, 12));
+    setRows((r) => [row, ...r].slice(0, 100));
   }
 
   async function submitBarcode(code: string) {
@@ -67,17 +83,7 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
     setBusy(false);
 
     if (res.error || res.reason) {
-      const msg =
-        res.reason === "out_of_order"
-          ? t("scan.outOfOrder").replace(
-              "{stage}",
-              res.expectedStage ? t(`stage.${res.expectedStage}` as DictKey) : "",
-            )
-          : res.reason === "step_off"
-            ? t("scan.stepOff")
-            : res.reason === "completed"
-              ? t("scan.completed")
-              : (res.error as string);
+      const msg = seqScanErrorMessage(t, res);
       setError(msg);
       setOkMsg(null);
       pushRow({ code, at: new Date().toLocaleTimeString(), ok: false, kind: "barcode", note: msg });
@@ -122,15 +128,14 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
     const el = taRef.current;
     const raw = el?.value ?? "";
     if (el) el.value = "";
-    setHasText(false);
     handleScan(raw);
     el?.focus();
   }
 
-  function scheduleFinalize() {
+  function scheduleFinalize(delay = 90) {
     if (timerRef.current) clearTimeout(timerRef.current);
     // Wait for the scanner to go idle (handles multi-line QR sent as several Enters).
-    timerRef.current = window.setTimeout(finalize, 90);
+    timerRef.current = window.setTimeout(finalize, delay);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -143,9 +148,9 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-5">
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       {/* Scanner */}
-      <GlassCard className="lg:col-span-3">
+      <GlassCard className="">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded-2xl bg-accent-gradient text-[var(--accent-contrast)] glow">
@@ -161,67 +166,48 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
           </Badge>
         </div>
 
-        {/* selectors (chef/admin) */}
-        {(canSelectStage || !lockEntity) && (
+        {/* Step picker — only when the user may scan more than one station */}
+        {canSelectStage && (
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            {canSelectStage && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-faint">{t("scan.stageLabel")}</span>
-                <select
-                  value={stageSel}
-                  onChange={(e) => {
-                    setStageSel(e.target.value as WorkflowStage);
-                    setCarteMere(null);
-                    setOkMsg(null);
-                    setError(null);
-                  }}
-                  className="ring-accent h-9 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 text-sm text-foreground focus:border-[var(--accent)]"
-                >
-                  {stages.map((s) => (
-                    <option key={s} value={s}>
-                      {t(`stage.${s}` as DictKey)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {!lockEntity && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-faint">{t("scan.type")}</span>
-                <select
-                  value={entity}
-                  onChange={(e) => setEntity(e.target.value as EntityType)}
-                  className="ring-accent h-9 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 text-sm capitalize text-foreground focus:border-[var(--accent)]"
-                >
-                  {ENTITY_TYPES.map((tp) => (
-                    <option key={tp} value={tp}>
-                      {tp}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-faint">{t("scan.stageLabel")}</span>
+              <select
+                value={stageSel}
+                onChange={(e) => {
+                  setStageSel(e.target.value as WorkflowStage);
+                  setCarteMere(null);
+                  setOkMsg(null);
+                  setError(null);
+                }}
+                className="ring-accent h-9 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 text-sm text-foreground focus:border-[var(--accent)]"
+              >
+                {stages.map((s) => (
+                  <option key={s} value={s}>
+                    {t(`stage.${s}` as DictKey)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         )}
 
-        {/* Tool scan field — physical scanner types here */}
-        <div className="flex items-end gap-2">
-          <div className="relative flex-1">
-            <Keyboard className="pointer-events-none absolute start-3 top-3.5 h-4 w-4 text-faint" />
-            <textarea
-              ref={taRef}
-              rows={1}
-              onKeyDown={onKeyDown}
-              onChange={(e) => setHasText(e.target.value.trim().length > 0)}
-              placeholder={t("scan.scanHere")}
-              autoFocus
-              spellCheck={false}
-              className="ring-accent min-h-[2.75rem] w-full resize-y rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-2.5 ps-10 pe-4 font-mono text-sm text-foreground placeholder:text-faint focus:border-[var(--accent)]"
-            />
-          </div>
-          <Button onClick={finalize} disabled={busy || !hasText}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("scan.record")}
-          </Button>
+        {/* Tool scan field — physical scanner types here; scans auto-submit */}
+        <div className="relative">
+          <Keyboard className="pointer-events-none absolute start-5 top-1/2 h-6 w-6 -translate-y-1/2 text-faint" />
+          <textarea
+            ref={taRef}
+            rows={1}
+            wrap="off"
+            onKeyDown={onKeyDown}
+            onChange={() => scheduleFinalize(200)}
+            placeholder={t("scan.scanHere")}
+            autoFocus
+            spellCheck={false}
+            className="ring-accent h-20 w-full resize-none overflow-hidden truncate rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-6 ps-14 pe-14 font-mono text-xl text-foreground placeholder:text-faint focus:border-[var(--accent)]"
+          />
+          {busy && (
+            <Loader2 className="absolute end-5 top-1/2 h-6 w-6 -translate-y-1/2 animate-spin text-[var(--accent)]" />
+          )}
         </div>
 
         {okMsg && (
@@ -238,7 +224,7 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
           </div>
         )}
 
-        {/* Carte mère data (QR), Scan BF only */}
+        {/* Carte mère data (QR), Scan PCBA only */}
         {enableQr && carteMere && (
           <div className="mt-4 rounded-2xl border border-[var(--accent)]/30 bg-[var(--accent-soft)] p-4">
             <div className="mb-3 flex items-center gap-2">
@@ -264,43 +250,6 @@ export function Scanner({ stages, entityType = "item", lockEntity = false }: Sca
         )}
       </GlassCard>
 
-      {/* Session log */}
-      <GlassCard className="lg:col-span-2">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-display text-lg font-semibold text-foreground">{t("scan.session")}</h3>
-          <span className="text-xs text-faint">{rows.length}</span>
-        </div>
-        {rows.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-[var(--border)] py-10 text-center text-sm text-faint">
-            {t("scan.empty")}
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {rows.map((r, i) => (
-              <li
-                key={i}
-                className={cn(
-                  "flex items-center gap-3 rounded-2xl border px-3 py-2.5",
-                  r.ok ? "border-[var(--border)] bg-[var(--surface-2)]" : "border-rose-500/30 bg-rose-500/10",
-                )}
-              >
-                {r.kind === "qr" ? (
-                  <QrCode className="h-4 w-4 shrink-0 text-[var(--accent)]" />
-                ) : r.ok ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm text-foreground">{r.code}</div>
-                  {r.note && <div className="truncate text-xs text-faint">{r.note}</div>}
-                </div>
-                <span className="text-xs text-faint">{r.at}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </GlassCard>
     </div>
   );
 }

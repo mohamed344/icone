@@ -1,5 +1,6 @@
 import { AppShell, type ShellUser } from "@/components/layout/AppShell";
 import { requireUser } from "@/lib/auth/session";
+import { userCan } from "@/lib/auth/permissions";
 
 function initialsFrom(name: string | null, email: string | null): string {
   const base = (name || email || "U").trim();
@@ -20,6 +21,7 @@ export default async function AppGroupLayout({ children }: { children: React.Rea
     email: session.email || "",
     role: profile?.role ?? "operator",
     initials: initialsFrom(profile?.full_name ?? null, session.email),
+    canApproveRejected: await userCan(profile, "approve_rejected"),
   };
 
   return <AppShell user={user}>{children}</AppShell>;

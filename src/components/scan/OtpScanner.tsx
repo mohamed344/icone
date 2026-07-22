@@ -1,62 +1,81 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { recordOtpScan, closeOtpBox, type OtpConfig, type OtpBoxView } from "@/app/(app)/scan/otp-actions";
-import { resubmitReworkBox, type QcBox } from "@/app/(app)/scan/qc1-actions";
-import { useT, type DictKey } from "@/lib/i18n";
+import { useState } from "react";
+import { recordOtpScan, closeOtpBox, getOtpWaitingCount, getBoxLabel, type OtpConfig, type OtpBoxView } from "@/app/(app)/scan/otp-actions";
+import { useT } from "@/lib/i18n";
+import { parseScan } from "@/lib/scan/parse-scan";
+import { seqScanErrorMessage } from "@/lib/scan/scan-error";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { Modal } from "@/components/ui/Modal";
+import { printSoon } from "@/lib/print/use-auto-print";
+import { BoxLabel } from "./BoxLabel";
+import { ToolScanField } from "./ToolScanField";
 import { cn } from "@/lib/cn";
-import { Boxes, Keyboard, Loader2, CheckCircle2, AlertCircle, PackageCheck, Package, Wrench, RotateCcw } from "lucide-react";
+import { Boxes, CheckCircle2, AlertCircle, PackageCheck, Package, Hourglass, Printer, Barcode as BarcodeIcon } from "lucide-react";
 
 interface DoneBox {
   boxNumber: number;
   count: number;
   product: string | null;
+  boxCode: string | null;
 }
 
 export function OtpScanner({
   config,
   initialBox = null,
-  initialRework = [],
+  initialWaiting = 0,
+  initialDone = [],
 }: {
   config: OtpConfig;
   initialBox?: OtpBoxView | null;
-  initialRework?: QcBox[];
+  initialWaiting?: number;
+  initialDone?: DoneBox[];
 }) {
   const t = useT();
-  const router = useRouter();
   const isCount = config.mode === "count";
+
+  const [waiting, setWaiting] = useState(initialWaiting);
+  async function refreshWaiting() {
+    try {
+      setWaiting(await getOtpWaitingCount());
+    } catch {
+      /* ignore */
+    }
+  }
 
   const [product, setProduct] = useState(initialBox?.product ?? "");
   const [busy, setBusy] = useState(false);
-  const [hasText, setHasText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState<OtpBoxView | null>(initialBox);
-  const [done, setDone] = useState<DoneBox[]>([]);
+  const [done, setDone] = useState<DoneBox[]>(initialDone);
   const [lastCode, setLastCode] = useState<string | null>(null);
   const [flashClosed, setFlashClosed] = useState<number | null>(null);
-  const [rework, setRework] = useState<QcBox[]>(initialRework);
-  const [resubmitting, startResubmit] = useTransition();
+  // The closed box whose printable barcode ticket is shown (auto-opens on close).
+  const [labelBox, setLabelBox] = useState<DoneBox | null>(null);
+  // Member carte serials of the label box — their barcodes print on the ticket.
+  const [labelSerials, setLabelSerials] = useState<string[]>([]);
 
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
-  const timerRef = useRef<number | null>(null);
-
-  function resubmit(id: string) {
-    startResubmit(async () => {
-      const res = await resubmitReworkBox(id);
-      if (res.ok) {
-        setRework((r) => r.filter((b) => b.id !== id));
-        router.refresh();
+  /** Show a closed box's printable ticket, loading its member barcodes. */
+  async function openLabel(box: DoneBox, print: boolean) {
+    setLabelBox(box);
+    setLabelSerials([]);
+    if (print) printSoon();
+    if (box.boxCode) {
+      try {
+        setLabelSerials(await getBoxLabel(box.boxCode));
+      } catch {
+        /* ignore — the ticket still shows the box code */
       }
-    });
+    }
   }
 
   async function submit(code: string) {
-    const trimmed = code.trim();
+    // From step 1 to Binding the operator scans the carte QR (serial inside);
+    // extract and record the serial (the stored identifier), not the raw QR text.
+    const trimmed = parseScan(code, true).code.trim();
     if (!trimmed || busy) return;
     setBusy(true);
     setError(null);
@@ -64,23 +83,24 @@ export function OtpScanner({
     setBusy(false);
 
     if (res.error || res.reason) {
-      const msg =
-        res.reason === "out_of_order"
-          ? t("scan.outOfOrder").replace("{stage}", res.expectedStage ? t(`stage.${res.expectedStage}` as DictKey) : "")
-          : res.reason === "step_off"
-            ? t("scan.stepOff")
-            : res.reason === "completed"
-              ? t("scan.completed")
-              : (res.error as string);
-      setError(msg);
+      setError(seqScanErrorMessage(t, res));
       return;
     }
 
     setLastCode(trimmed);
+    void refreshWaiting();
     if (res.box) {
       if (res.boxClosed) {
-        setDone((d) => [{ boxNumber: res.box!.boxNumber, count: res.box!.count, product: res.box!.product }, ...d].slice(0, 20));
+        const closed: DoneBox = {
+          boxNumber: res.box.boxNumber,
+          count: res.box.count,
+          product: res.box.product,
+          boxCode: res.box.boxCode ?? null,
+        };
+        setDone((d) => [closed, ...d].slice(0, 20));
         setFlashClosed(res.box.boxNumber);
+        // Box finished → show its barcode ticket and print it automatically.
+        if (closed.boxCode) void openLabel(closed, true);
         setCurrent(null); // next scan opens a fresh box
       } else {
         setCurrent(res.box);
@@ -89,40 +109,23 @@ export function OtpScanner({
     }
   }
 
-  function finalize() {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const el = taRef.current;
-    const raw = el?.value ?? "";
-    if (el) el.value = "";
-    setHasText(false);
-    void submit(raw);
-    el?.focus();
-  }
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      timerRef.current = window.setTimeout(finalize, 90);
-    }
-  }
-
   async function closeBox() {
     setBusy(true);
     const res = await closeOtpBox();
     setBusy(false);
     if (res.ok && res.boxNumber != null) {
-      setDone((d) => [{ boxNumber: res.boxNumber!, count: res.count ?? 0, product: current?.product ?? null }, ...d].slice(0, 20));
+      const closed: DoneBox = {
+        boxNumber: res.boxNumber,
+        count: res.count ?? 0,
+        product: current?.product ?? null,
+        boxCode: res.boxCode ?? null,
+      };
+      setDone((d) => [closed, ...d].slice(0, 20));
+      // Box finished → show its barcode ticket and print it automatically.
+      if (closed.boxCode) void openLabel(closed, true);
     }
     setCurrent(null);
     setFlashClosed(res.boxNumber ?? null);
-    taRef.current?.focus();
   }
 
   const count = current?.count ?? 0;
@@ -131,15 +134,18 @@ export function OtpScanner({
 
   return (
     <>
+      {/* Only the box ticket prints, on an 80mm receipt page (not A4). */}
+      <style>{`@media print { @page { size: 80mm auto; margin: 0; } html, body { margin: 0 !important; padding: 0 !important; } body * { visibility: hidden !important; } #print-label, #print-label * { visibility: visible !important; } #print-label { position: absolute !important; top: 0; left: 0; width: 80mm !important; max-width: 80mm !important; margin: 0 !important; padding: 4mm !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; } #print-label svg { max-width: 100% !important; height: auto !important; } }`}</style>
+
       <PageHeader title={t("otp.title")} subtitle={t("otp.subtitle")}>
         <Badge tone="accent" dot>
           {isCount ? t("otp.modeCount").replace("{n}", String(config.size)) : t("otp.modeProduct")}
         </Badge>
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         {/* Scanner + current box */}
-        <GlassCard className="lg:col-span-3">
+        <GlassCard className="">
           <div className="mb-4 flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded-2xl bg-accent-gradient text-[var(--accent-contrast)] glow">
               <Boxes className="h-5 w-5" />
@@ -162,6 +168,22 @@ export function OtpScanner({
               />
             </label>
           )}
+
+          {/* Waiting-to-enter-OTP counter (passed step 1, not yet at OTP) */}
+          <div className="mb-3 flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
+            <span className="flex items-center gap-2 text-sm font-medium text-muted">
+              <Hourglass className="h-4 w-4" /> {t("otp.waitingLabel")}
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-display text-lg font-semibold text-foreground">{waiting}</span>
+              <button
+                onClick={refreshWaiting}
+                className="ring-accent rounded-lg px-2 py-1 text-xs text-muted hover:text-[var(--accent)]"
+              >
+                {t("qc1.refresh")}
+              </button>
+            </div>
+          </div>
 
           {/* Current box card */}
           <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-4">
@@ -190,25 +212,8 @@ export function OtpScanner({
             )}
           </div>
 
-          {/* Tool scan field */}
-          <div className="flex items-end gap-2">
-            <div className="relative flex-1">
-              <Keyboard className="pointer-events-none absolute start-3 top-3.5 h-4 w-4 text-faint" />
-              <textarea
-                ref={taRef}
-                rows={1}
-                onKeyDown={onKeyDown}
-                onChange={(e) => setHasText(e.target.value.trim().length > 0)}
-                placeholder={t("scan.scanHere")}
-                autoFocus
-                spellCheck={false}
-                className="ring-accent min-h-[2.75rem] w-full resize-y rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-2.5 ps-10 pe-4 font-mono text-sm text-foreground placeholder:text-faint focus:border-[var(--accent)]"
-              />
-            </div>
-            <Button onClick={finalize} disabled={busy || !hasText}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("scan.record")}
-            </Button>
-          </div>
+          {/* Tool scan field — scans auto-submit, no button */}
+          <ToolScanField onScan={submit} busy={busy} placeholder={t("scan.scanHere")} />
 
           <div className="mt-2">
             <Button variant="glass" size="sm" onClick={closeBox} disabled={busy || !current}>
@@ -237,7 +242,7 @@ export function OtpScanner({
         </GlassCard>
 
         {/* Completed boxes */}
-        <GlassCard className="lg:col-span-2">
+        <GlassCard className="">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-display text-lg font-semibold text-foreground">{t("otp.completed")}</h3>
             <span className="text-xs text-faint">{done.length}</span>
@@ -249,17 +254,32 @@ export function OtpScanner({
           ) : (
             <ul className="space-y-2">
               {done.map((b, i) => (
-                <li key={i} className="flex items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5">
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                    <Boxes className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-foreground">
-                      {t("otp.box")} #{b.boxNumber}
+                <li key={i}>
+                  <button
+                    type="button"
+                    onClick={() => b.boxCode && openLabel(b, false)}
+                    disabled={!b.boxCode}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-start transition-colors",
+                      b.boxCode ? "ring-accent hover:border-[var(--accent)]" : "cursor-default",
+                    )}
+                  >
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                      <Boxes className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-foreground">
+                        {t("otp.box")} #{b.boxNumber}
+                      </div>
+                      {b.boxCode && (
+                        <div className="flex items-center gap-1 truncate font-mono text-xs text-[var(--accent)]">
+                          <BarcodeIcon className="h-3 w-3 shrink-0" /> {b.boxCode}
+                        </div>
+                      )}
+                      {b.product && <div className="truncate text-xs text-faint">{b.product}</div>}
                     </div>
-                    {b.product && <div className="truncate text-xs text-faint">{b.product}</div>}
-                  </div>
-                  <Badge tone="success">{b.count} {t("otp.units")}</Badge>
+                    <Badge tone="success">{b.count} {t("otp.units")}</Badge>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -267,37 +287,28 @@ export function OtpScanner({
         </GlassCard>
       </div>
 
-      {/* Rework queue — boxes QC#1 sent back */}
-      {rework.length > 0 && (
-        <GlassCard>
-          <div className="mb-3 flex items-center gap-2">
-            <Wrench className="h-5 w-5 text-amber-500" />
-            <h3 className="font-display text-lg font-semibold text-foreground">{t("otp.rework")}</h3>
-            <Badge tone="warning">{rework.length}</Badge>
+      {/* Auto-generated box barcode label — printable / scannable downstream. */}
+      <Modal open={!!labelBox} onClose={() => setLabelBox(null)} title={t("otp.boxLabel")}>
+        {labelBox?.boxCode && (
+          <div className="flex flex-col gap-4">
+            <BoxLabel
+              boxCode={labelBox.boxCode}
+              boxNumber={labelBox.boxNumber}
+              count={labelBox.count}
+              product={labelBox.product}
+              serials={labelSerials}
+            />
+            <div className="flex gap-2">
+              <Button variant="glass" onClick={() => window.print()} className="flex-1">
+                <Printer className="h-4 w-4" /> {t("reprint.print")}
+              </Button>
+              <Button onClick={() => setLabelBox(null)} className="flex-1">
+                <CheckCircle2 className="h-4 w-4" /> {t("common.cancel")}
+              </Button>
+            </div>
           </div>
-          <ul className="space-y-2">
-            {rework.map((b) => (
-              <li
-                key={b.id}
-                className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5"
-              >
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                  <Wrench className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm font-medium text-foreground">
-                    {b.boxCode ?? `#${b.boxNumber}`}
-                  </div>
-                  {b.reason && <div className="truncate text-xs text-muted">{b.reason}</div>}
-                </div>
-                <Button variant="glass" size="sm" onClick={() => resubmit(b.id)} disabled={resubmitting}>
-                  <RotateCcw className="h-4 w-4" /> {t("otp.resubmit")}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </GlassCard>
-      )}
+        )}
+      </Modal>
     </>
   );
 }

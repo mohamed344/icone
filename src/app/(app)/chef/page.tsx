@@ -1,23 +1,41 @@
 import { requireRole } from "@/lib/auth/session";
-import { createClient } from "@/lib/supabase/server";
-import { ChefView, type QcRow } from "@/components/chef/ChefView";
+import { StationSwitcher } from "@/components/chef/StationSwitcher";
+import { StationConsole } from "@/components/scan/StationConsole";
+import { CartonQc2Panel } from "@/components/chef/CartonQc2Panel";
+import { WaitingByStep } from "@/components/chef/WaitingByStep";
+import { getChefCartons } from "@/app/(app)/scan/carton-actions";
+import { getWaitingByStep } from "@/lib/chef/waiting";
 import { WORKFLOW_STAGES, type WorkflowStage } from "@/lib/workflow";
 
-export default async function ChefPage() {
-  const { profile } = await requireRole(["chef_de_ligne"]);
-  const supabase = await createClient();
+export default async function ChefPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ station?: string }>;
+}) {
+  await requireRole(["chef_de_ligne"]);
 
-  // A supervisor oversees their whole line unless the admin narrowed them.
-  const allowed = profile?.allowed_stations ?? [];
-  const stages: WorkflowStage[] = allowed.length ? allowed : [...WORKFLOW_STAGES];
+  // A supervisor may act at ANY station (see isSupervisor / guardStation), so the
+  // switcher always spans the whole line — allowed_stations only restricts operators.
+  // (Otherwise a station missing from a chef's list — e.g. Réparation added later —
+  //  would strand products sent there with no tab to handle them.)
+  const stages: WorkflowStage[] = [...WORKFLOW_STAGES];
 
-  // QC#2 decisions on the supervisor's line (RLS scopes to their line).
-  const { data } = await supabase
-    .from("qc_checks")
-    .select("id, item_id, decision, reason, overridden_by, decided_at")
-    .eq("check_type", "qc2")
-    .order("decided_at", { ascending: false })
-    .limit(25);
+  // Selected station comes from the URL (station switcher); default to the first.
+  const sp = await searchParams;
+  const requested = sp.station as WorkflowStage | undefined;
+  const station: WorkflowStage = requested && stages.includes(requested) ? requested : stages[0];
 
-  return <ChefView rows={(data as QcRow[]) ?? []} stages={stages} />;
+  // Carton QC#2 decisions + the codes still waiting at each step.
+  const [cartons, waiting] = await Promise.all([getChefCartons(), getWaitingByStep()]);
+
+  return (
+    <>
+      <StationSwitcher stages={stages} active={station} />
+      <StationConsole station={station} />
+      <WaitingByStep steps={waiting} />
+      {/* The Qualité 2 station's own console handles carton QC#2 — no need to
+          repeat the overview card there. */}
+      {station !== "qc2_final" && <CartonQc2Panel cartons={cartons} />}
+    </>
+  );
 }

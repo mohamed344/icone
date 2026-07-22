@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   getUnitQueue,
-  findUnitByCode,
+  findUnitByCarteOrDimo,
   getUnitLabel,
   markReprinted,
   type Unit,
@@ -12,6 +12,8 @@ import {
 } from "@/app/(app)/scan/unit-actions";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT } from "@/lib/i18n";
+import { notFoundMessage } from "@/lib/scan/locate";
+import { printSoon } from "@/lib/print/use-auto-print";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
@@ -19,8 +21,15 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { ToolScanField } from "./ToolScanField";
 import { PrintableLabel } from "./PrintableLabel";
-import { Cpu, Printer, AlertCircle, ScanLine, CheckCircle2, Loader2 } from "lucide-react";
+import { Printer, AlertCircle, ScanLine, Loader2, ShieldCheck } from "lucide-react";
 
+const norm = (s: string) => s.trim().replace(/\s+/g, "");
+
+/**
+ * Reprint: two scans per product. Scan #1 identifies the unit and its label
+ * prints itself immediately (no click). Scan #2 must match scan #1 before the
+ * unit advances — guaranteeing the just-printed label is on the right product.
+ */
 export function ReprintScanner({ initialQueue }: { initialQueue: Unit[] }) {
   const t = useT();
   const router = useRouter();
@@ -30,8 +39,14 @@ export function ReprintScanner({ initialQueue }: { initialQueue: Unit[] }) {
   const [target, setTarget] = useState<Unit | null>(null);
   const [label, setLabel] = useState<UnitLabel | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [scanErr, setScanErr] = useState<string | null>(null);
+  const [matchErr, setMatchErr] = useState<string | null>(null);
   const [, start] = useTransition();
+
+  // Scan #1 done → the label auto-prints the moment it renders (no click).
+  useEffect(() => {
+    if (target && label) return printSoon();
+  }, [target, label]);
 
   async function refresh() {
     try {
@@ -50,30 +65,40 @@ export function ReprintScanner({ initialQueue }: { initialQueue: Unit[] }) {
 
   async function open(unit: Unit) {
     setTarget(unit);
-    setError(null);
+    setMatchErr(null);
     setLabel(await getUnitLabel(unit.id));
   }
 
-  async function scan(code: string) {
+  // Scan #1 — pick the product and print its label.
+  async function scan1(code: string) {
     const c = code.trim();
     if (!c) return;
-    setError(null);
-    const unit = queue.find((u) => u.serial === c) ?? (await findUnitByCode("rescan_reprint", c));
+    setScanErr(null);
+    const unit = queue.find((u) => u.serial === c || u.dimo === c) ?? (await findUnitByCarteOrDimo("rescan_reprint", c));
     if (!unit) {
-      setError(t("reprint.notFound"));
+      setScanErr(await notFoundMessage(t, c, "reprint.notFound"));
       return;
     }
     void open(unit);
   }
 
-  function done() {
+  // Scan #2 — must match scan #1, then advance.
+  function scan2(code: string) {
     if (!target) return;
+    // Confirm against the printed label (carte serial) or the product's dimo.
+    const matches =
+      norm(code) === norm(target.serial) || (target.dimo != null && norm(code) === norm(target.dimo));
+    if (!matches) {
+      setMatchErr(t("reprint.mismatch"));
+      return;
+    }
     setBusy(true);
+    setMatchErr(null);
     start(async () => {
       const res = await markReprinted(target.id);
       setBusy(false);
       if (res.error) {
-        setError(res.error);
+        setMatchErr(res.error);
         return;
       }
       setQueue((q) => q.filter((u) => u.id !== target.id));
@@ -83,10 +108,15 @@ export function ReprintScanner({ initialQueue }: { initialQueue: Unit[] }) {
     });
   }
 
+  function closeModal() {
+    setTarget(null);
+    setLabel(null);
+    setMatchErr(null);
+  }
+
   return (
     <>
-      {/* Only the label prints; everything else is hidden by print CSS. */}
-      <style>{`@media print { body * { visibility: hidden !important; } #print-label, #print-label * { visibility: visible !important; } #print-label { position: fixed; inset: 0; margin: auto; } }`}</style>
+      <style>{`@media print { @page { margin: 8mm; } body * { visibility: hidden !important; } #print-label, #print-label * { visibility: visible !important; } #print-label { position: fixed; inset: 0; margin: auto; } }`}</style>
 
       <PageHeader title={t("stage.rescan_reprint")} subtitle={t("reprint.subtitle")}>
         <Badge tone="accent" dot>
@@ -94,8 +124,8 @@ export function ReprintScanner({ initialQueue }: { initialQueue: Unit[] }) {
         </Badge>
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-5">
-        <GlassCard className="lg:col-span-3">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+        <GlassCard className="">
           <div className="mb-4 flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded-2xl bg-accent-gradient text-[var(--accent-contrast)] glow">
               <ScanLine className="h-5 w-5" />
@@ -105,64 +135,38 @@ export function ReprintScanner({ initialQueue }: { initialQueue: Unit[] }) {
               <p className="text-xs text-faint">{t("reprint.scanHint")}</p>
             </div>
           </div>
-          <ToolScanField onScan={scan} placeholder={t("unit.scanSerial")} />
-          {error && !target && (
+          <ToolScanField onScan={scan1} placeholder={t("reprint.scan1")} />
+          {scanErr && (
             <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-600 dark:text-rose-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
+              <span>{scanErr}</span>
             </div>
-          )}
-        </GlassCard>
-
-        <GlassCard padded={false} className="overflow-hidden lg:col-span-2">
-          <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
-            <h3 className="font-display font-semibold text-foreground">{t("reprint.queue")}</h3>
-            <button onClick={refresh} className="ring-accent rounded-lg px-2 py-1 text-xs text-muted hover:text-[var(--accent)]">
-              {t("qc1.refresh")}
-            </button>
-          </div>
-          {queue.length === 0 ? (
-            <div className="py-10 text-center text-sm text-faint">{t("reprint.empty")}</div>
-          ) : (
-            <ul className="max-h-[28rem] divide-y divide-[var(--border)] overflow-y-auto">
-              {queue.map((u) => (
-                <li key={u.id}>
-                  <button
-                    onClick={() => open(u)}
-                    className="ring-accent flex w-full items-center gap-3 px-4 py-3 text-start transition-colors hover:bg-[var(--surface-2)]"
-                  >
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                      <Cpu className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-sm text-foreground">{u.serial}</div>
-                      {u.product && <div className="truncate text-xs text-faint">{u.product}</div>}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
           )}
         </GlassCard>
       </div>
 
-      <Modal open={!!target} onClose={() => { setTarget(null); setLabel(null); }} title={t("reprint.label")}>
+      {/* Label auto-prints on open; scan #2 confirms the match, then advances. */}
+      <Modal open={!!target} onClose={closeModal} title={t("reprint.label")}>
         {target && label && (
           <div className="flex flex-col gap-4">
             <PrintableLabel label={label} />
-            {error && (
+            <div className="flex items-center gap-2 rounded-2xl border border-[var(--accent)]/30 bg-[var(--accent-soft)] px-4 py-3 text-sm text-foreground">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+              <span>{t("reprint.confirmHint")}</span>
+            </div>
+            <ToolScanField busy={busy} onScan={scan2} placeholder={t("reprint.scan2")} />
+            {matchErr && (
               <div className="flex items-start gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-600 dark:text-rose-400">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{error}</span>
+                <span>{matchErr}</span>
               </div>
             )}
             <div className="flex gap-2">
               <Button variant="glass" onClick={() => window.print()} className="flex-1">
                 <Printer className="h-4 w-4" /> {t("reprint.print")}
               </Button>
-              <Button onClick={done} disabled={busy} className="flex-1">
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                {t("reprint.doneAdvance")}
+              <Button variant="glass" onClick={closeModal} disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : t("common.cancel")}
               </Button>
             </div>
           </div>

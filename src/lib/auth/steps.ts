@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { WORKFLOW_STAGES, type WorkflowStage } from "@/lib/workflow";
 
@@ -8,8 +9,9 @@ export interface StepRow {
   enabled: boolean;
 }
 
-/** All 11 steps in order with their enabled flag (falls back to all-on). */
-export async function getAllSteps(): Promise<StepRow[]> {
+/** All 11 steps in order with their enabled flag (falls back to all-on).
+ * Memoized per request — stage lookups repeat across a single action. */
+export const getAllSteps = cache(async (): Promise<StepRow[]> => {
   const supabase = await createClient();
   const { data } = await supabase
     .from("workflow_steps")
@@ -20,7 +22,7 @@ export async function getAllSteps(): Promise<StepRow[]> {
     return WORKFLOW_STAGES.map((stage, i) => ({ stage, position: i + 1, enabled: true }));
   }
   return data as StepRow[];
-}
+});
 
 /** Enabled steps in canonical order. */
 export async function getEnabledStages(): Promise<WorkflowStage[]> {

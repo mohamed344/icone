@@ -3,8 +3,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionUser } from "@/lib/auth/session";
-import { notify, qc1OperatorIds, operatorIdsAtStage } from "@/lib/notify";
+import { notify, operatorIdsAtStage } from "@/lib/notify";
 import { nextEnabledStage } from "@/lib/auth/steps";
+import { isSupervisor, type Role } from "@/lib/workflow";
 
 export interface QcBox {
   id: string;
@@ -14,6 +15,8 @@ export interface QcBox {
   count: number;
   createdBy: string | null;
   reason?: string | null;
+  /** 'awaiting' (fresh) | 'rework' (non-conform, being fixed in Quality 1). */
+  state?: string | null;
 }
 
 interface Row {
@@ -24,6 +27,7 @@ interface Row {
   count: number;
   created_by: string | null;
   qc_reason: string | null;
+  qc_state?: string | null;
 }
 
 const toBox = (r: Row): QcBox => ({
@@ -34,33 +38,36 @@ const toBox = (r: Row): QcBox => ({
   count: r.count,
   createdBy: r.created_by,
   reason: r.qc_reason,
+  state: r.qc_state ?? null,
 });
 
 async function isQc1(role: string | undefined, stations: string[] | undefined) {
-  return role === "admin" || (Array.isArray(stations) && stations.includes("qc1_box"));
+  return (
+    isSupervisor(role as Role) || (Array.isArray(stations) && stations.includes("qc1_box"))
+  );
 }
 
-/** Boxes awaiting QC#1 decision. */
+/** Boxes awaiting a QC#1 decision — fresh (`awaiting`) or being fixed (`rework`). */
 export async function getQc1Queue(): Promise<QcBox[]> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("otp_boxes")
-    .select("id, box_code, box_number, product, count, created_by, qc_reason")
-    .eq("qc_state", "awaiting")
+    .select("id, box_code, box_number, product, count, created_by, qc_reason, qc_state")
+    .in("qc_state", ["awaiting", "rework"])
     .order("closed_at", { ascending: true })
     .limit(100);
   return ((data as Row[]) ?? []).map(toBox);
 }
 
-/** Find an awaiting box by its scannable code. */
+/** Find a box awaiting a QC#1 decision (fresh or in rework) by its scannable code. */
 export async function findAwaitingBoxByCode(code: string): Promise<QcBox | null> {
   const c = code.trim();
   if (!c) return null;
   const supabase = await createClient();
   const { data } = await supabase
     .from("otp_boxes")
-    .select("id, box_code, box_number, product, count, created_by, qc_reason")
-    .eq("qc_state", "awaiting")
+    .select("id, box_code, box_number, product, count, created_by, qc_reason, qc_state")
+    .in("qc_state", ["awaiting", "rework"])
     .eq("box_code", c)
     .maybeSingle();
   return data ? toBox(data as Row) : null;
@@ -89,11 +96,15 @@ export async function qc1Decision(
   const supabase = await createClient();
   const { data: box } = await supabase
     .from("otp_boxes")
-    .select("id, box_code, created_by, qc_state")
+    .select("id, box_code, product, created_by, qc_state")
     .eq("id", boxId)
     .single();
   if (!box) return { error: "Box not found." };
-  if (box.qc_state !== "awaiting") return { error: "This box was already decided." };
+  // A box may be decided while `awaiting`, or re-decided while in `rework`
+  // (non-conform stays in Quality 1 until it is fixed and passed).
+  if (!["awaiting", "rework"].includes(box.qc_state as string)) {
+    return { error: "This box was already decided." };
+  }
 
   const now = new Date().toISOString();
   // Box-state writes go through the service-role client: the QC operator is not
@@ -101,7 +112,7 @@ export async function qc1Decision(
   const admin = createAdminClient();
 
   if (decision === "conform") {
-    // Advance every unit of the box to qc1_box (batch scan_events).
+    // Record one qc1_box scan_event per member unit (batch audit).
     const { data: members } = await supabase
       .from("scan_events")
       .select("code")
@@ -121,8 +132,9 @@ export async function qc1Decision(
       );
     }
 
-    // Hand the box off to the next enabled step (reception).
-    const next = await nextEnabledStage("qc1_box");
+    // Conform → the box travels as a BOX to reception, where it is scanned once
+    // and only then dissolves into individual units (see stage-actions.passBox).
+    const next = await nextEnabledStage("qc1_box"); // reception
     await admin
       .from("otp_boxes")
       .update({ qc_state: "conform", qc_by: session!.userId, qc_at: now, current_stage: next })
@@ -137,7 +149,8 @@ export async function qc1Decision(
     return { ok: true };
   }
 
-  // Non-conform → rework
+  // Non-conform → the box stays in Quality 1 (state 'rework'), NOT routed back to
+  // OTP. Once physically fixed, the QC operator re-scans it and chooses conform.
   await admin
     .from("otp_boxes")
     .update({ qc_state: "rework", qc_reason: reason!.trim(), qc_by: session!.userId, qc_at: now, current_stage: null })
@@ -151,47 +164,5 @@ export async function qc1Decision(
     created_by: session!.userId,
   });
 
-  if (box.created_by) {
-    await notify([box.created_by], "box_rework", boxId, box.box_code ?? "", reason!.trim());
-  }
-  return { ok: true };
-}
-
-/** OTP operator's boxes that QC#1 sent to rework. */
-export async function getReworkBoxes(): Promise<QcBox[]> {
-  const session = await getSessionUser();
-  if (!session?.profile) return [];
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("otp_boxes")
-    .select("id, box_code, box_number, product, count, created_by, qc_reason")
-    .eq("qc_state", "rework")
-    .eq("created_by", session.userId)
-    .order("qc_at", { ascending: false })
-    .limit(50);
-  return ((data as Row[]) ?? []).map(toBox);
-}
-
-/** Operator re-submits a reworked box back to the QC#1 queue. */
-export async function resubmitReworkBox(boxId: string): Promise<QcDecisionResult> {
-  const session = await getSessionUser();
-  if (!session?.profile) return { error: "Not authenticated." };
-  const supabase = await createClient();
-
-  const { data: box } = await supabase
-    .from("otp_boxes")
-    .select("id, box_code, created_by, qc_state")
-    .eq("id", boxId)
-    .single();
-  if (!box || box.created_by !== session.userId) return { error: "Not allowed." };
-  if (box.qc_state !== "rework") return { error: "Box is not in rework." };
-
-  await supabase
-    .from("otp_boxes")
-    .update({ qc_state: "awaiting", qc_reason: null })
-    .eq("id", boxId);
-
-  const qcIds = await qc1OperatorIds();
-  await notify(qcIds, "box_ready", boxId, box.box_code ?? "");
   return { ok: true };
 }

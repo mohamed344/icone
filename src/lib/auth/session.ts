@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Role, WorkflowStage, PermissionMap } from "@/lib/workflow";
@@ -23,8 +24,12 @@ export interface SessionUser {
   profile: Profile | null;
 }
 
-/** Current user + profile, or null if not signed in. */
-export async function getSessionUser(): Promise<SessionUser | null> {
+/**
+ * Current user + profile, or null if not signed in. Memoized per request with
+ * React `cache()` so repeated calls within one server action / render collapse
+ * to a single `auth.getUser()` + `profiles` lookup (avoids duplicate round-trips).
+ */
+export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -38,7 +43,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     .single();
 
   return { userId: user.id, email: user.email ?? null, profile: (profile as Profile) ?? null };
-}
+});
 
 /** Where each role lands after login. */
 export function roleHome(role?: Role | null): string {

@@ -1,7 +1,7 @@
 /**
  * Parse a value coming from the physical scanner tool.
  *
- * At Scan BF a carte mère carries two marks:
+ * At Scan PCBA a carte mère carries two marks:
  *  - a QR code whose text holds the unit data as "Label: value" lines
  *  - a barcode that is a plain serial (e.g. Icone20260104027129)
  *
@@ -19,6 +19,8 @@ export interface ParsedScan {
   code: string;
   /** Present when kind === "qr". */
   fields?: ScanField[];
+  /** Best-effort operator/employee name pulled from the QR (kind === "qr"). */
+  operator?: string;
 }
 
 /** True when the text looks like structured QR data, not a single serial. */
@@ -50,7 +52,7 @@ function parseFields(text: string): ScanField[] {
 
 /**
  * @param raw     the scanned text
- * @param enableQr  enable QR detection (Scan BF only). When false, everything
+ * @param enableQr  enable QR detection (Scan PCBA only). When false, everything
  *                  is treated as a barcode that advances the workflow.
  */
 export function parseScan(raw: string, enableQr: boolean): ParsedScan {
@@ -58,9 +60,18 @@ export function parseScan(raw: string, enableQr: boolean): ParsedScan {
 
   if (enableQr && looksLikeQr(trimmed)) {
     const fields = parseFields(trimmed);
-    // Best-effort serial for reference (a field named like serial/série/code).
-    const serial = fields.find((f) => /serial|s[ée]rie|code|sn/i.test(f.label))?.value;
-    return { kind: "qr", code: serial ?? trimmed, fields };
+    // The N° série is the identifier that flows on to OTP, so extract it robustly:
+    //  1) a field labelled like serial/série/code/sn/matricule/pcba;
+    //  2) otherwise a value that looks like a serial (letters then ≥5 digits,
+    //     e.g. "Icone2026010402760").
+    const serial =
+      fields.find((f) => /serial|s[ée]rie|\bsn\b|matricule|pcba|code/i.test(f.label))?.value ??
+      fields.find((f) => /^[a-z]{2,}\d{5,}$/i.test((f.value ?? "").replace(/\s+/g, "")))?.value;
+    // Best-effort operator/employee name (a field named like operator/employé/agent).
+    const operator = fields.find((f) =>
+      /op[ée]rateur|operator|employ|agent|ouvrier|worker|technicien|nom|name/i.test(f.label),
+    )?.value;
+    return { kind: "qr", code: serial ?? trimmed, fields, operator };
   }
 
   // Barcode: collapse any stray whitespace/newlines to a single token.

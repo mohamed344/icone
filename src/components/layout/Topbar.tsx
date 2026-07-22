@@ -7,8 +7,10 @@ import { useTheme } from "@/lib/theme/theme-context";
 import { resolveMode, ENABLED_LANGUAGES } from "@/lib/theme/theme-config";
 import { Avatar } from "@/components/ui/Avatar";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
+import { formatNotifTime } from "@/lib/datetime";
+import { signOut } from "@/app/(auth)/actions";
 import type { ShellUser } from "./AppShell";
-import { Menu, Search, Sun, Moon, Bell, Languages, CheckCheck } from "lucide-react";
+import { Menu, Search, Sun, Moon, Bell, Languages, CheckCheck, LogOut } from "lucide-react";
 
 const LANG_LABEL: Record<string, string> = { en: "EN", ar: "ع", fr: "FR" };
 
@@ -16,7 +18,9 @@ export function Topbar({ user, onOpenMobile }: { user: ShellUser; onOpenMobile: 
   const t = useT();
   const { items, unread, markAllRead, markRead } = useNotifications();
   const [openNotif, setOpenNotif] = useState(false);
+  const [openUser, setOpenUser] = useState(false);
   const notifRef = useRef<HTMLDivElement | null>(null);
+  const userRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!openNotif) return;
@@ -26,6 +30,15 @@ export function Topbar({ user, onOpenMobile }: { user: ShellUser; onOpenMobile: 
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [openNotif]);
+
+  useEffect(() => {
+    if (!openUser) return;
+    const onClick = (e: MouseEvent) => {
+      if (userRef.current && !userRef.current.contains(e.target as Node)) setOpenUser(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [openUser]);
   const { theme, setTheme, ready } = useTheme();
   // Gate on `ready` to avoid a hydration mismatch (matchMedia is client-only).
   const isDark = ready && resolveMode(theme.mode) === "dark";
@@ -43,7 +56,7 @@ export function Topbar({ user, onOpenMobile }: { user: ShellUser; onOpenMobile: 
 
   return (
     <header className="glass sticky top-0 z-20 flex h-[4.5rem] items-center gap-3 border-b border-[var(--glass-border)] px-4 sm:px-6">
-      <button onClick={onOpenMobile} className={cn(iconBtn, "lg:hidden")} aria-label="Menu">
+      <button onClick={onOpenMobile} className={iconBtn} aria-label="Menu">
         <Menu className="h-5 w-5" />
       </button>
 
@@ -115,6 +128,9 @@ export function Topbar({ user, onOpenMobile }: { user: ShellUser; onOpenMobile: 
                             {t(`notif.${n.type}.body` as DictKey)} {n.title}
                             {n.body ? ` — ${n.body}` : ""}
                           </div>
+                          <div className="ps-3.5 mt-0.5 text-[11px] text-faint">
+                            {formatNotifTime(n.created_at, t.lang)}
+                          </div>
                         </button>
                       </li>
                     ))}
@@ -124,8 +140,37 @@ export function Topbar({ user, onOpenMobile }: { user: ShellUser; onOpenMobile: 
             </div>
           )}
         </div>
-        <div className="ms-1">
-          <Avatar initials={user.initials} hue={265} presence="online" size="sm" />
+        <div className="relative ms-1" ref={userRef}>
+          <button
+            onClick={() => setOpenUser((o) => !o)}
+            className="ring-accent rounded-full"
+            aria-label={user.name}
+            aria-haspopup="menu"
+            aria-expanded={openUser}
+          >
+            <Avatar initials={user.initials} hue={265} presence="online" size="sm" />
+          </button>
+          {openUser && (
+            <div className="glass absolute end-0 top-12 z-40 w-64 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--glass-border)] p-2 shadow-xl">
+              <div className="flex items-center gap-3 px-2 py-2">
+                <Avatar initials={user.initials} hue={265} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-foreground">{user.name}</div>
+                  <div className="truncate text-xs text-faint">{t(`role.${user.role}` as DictKey)}</div>
+                  <div className="truncate text-xs text-muted">{user.email}</div>
+                </div>
+              </div>
+              <div className="my-1 h-px bg-[var(--glass-border)]" />
+              <form action={signOut}>
+                <button
+                  type="submit"
+                  className="ring-accent flex w-full items-center gap-2 rounded-xl px-3 py-2 text-start text-sm font-medium text-rose-600 transition-colors hover:bg-rose-500/10 dark:text-rose-400"
+                >
+                  <LogOut className="h-4 w-4 flip-rtl" /> {t("common.signOut")}
+                </button>
+              </form>
+            </div>
+          )}
         </div>
       </div>
     </header>

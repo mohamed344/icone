@@ -6,18 +6,24 @@ import { getSessionUser, type WorkflowStage } from "@/lib/auth/session";
 import { recordScan } from "./actions";
 import { notify, qc1OperatorIds } from "@/lib/notify";
 
-/** Close a box, give it a scannable code, mark it awaiting QC#1, and alert QC. */
-async function sendBoxToQc(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  box: { id: string; box_number: number },
-) {
-  const boxCode = `BX-${box.box_number}-${box.id.slice(0, 6).toUpperCase()}`;
-  await supabase
+/**
+ * Close a box, give it a scannable code, mark it awaiting QC#1, and alert QC.
+ * Returns the generated box code so the UI can print/display its barcode.
+ */
+async function sendBoxToQc(box: { id: string; box_number: number }): Promise<string> {
+  // Format: Icone-Box{YEAR}{6-digit box number}, e.g. Icone-Box2026000001.
+  // Admin client: the box may have been opened by a different operator (boxes
+  // are station-shared), and RLS restricts otp_boxes updates to the creator.
+  const admin = createAdminClient();
+  const year = new Date().getFullYear();
+  const boxCode = `Icone-Box${year}${String(box.box_number).padStart(6, "0")}`;
+  await admin
     .from("otp_boxes")
     .update({ box_code: boxCode, qc_state: "awaiting" })
     .eq("id", box.id);
   const qcIds = await qc1OperatorIds();
   await notify(qcIds, "box_ready", box.id, boxCode);
+  return boxCode;
 }
 
 export type OtpMode = "count" | "product";
@@ -32,6 +38,8 @@ export interface OtpBoxView {
   count: number;
   target: number | null;
   product: string | null;
+  /** Scannable code — set only once the box is closed. */
+  boxCode?: string | null;
 }
 
 export interface OtpScanResult {
@@ -39,6 +47,8 @@ export interface OtpScanResult {
   error?: string;
   reason?: "out_of_order" | "step_off" | "completed";
   expectedStage?: WorkflowStage;
+  /** True when the code has never been scanned anywhere (out_of_order only). */
+  notStarted?: boolean;
   nextStage?: WorkflowStage | null;
   /** The box the unit went into (its state after this scan). */
   box?: OtpBoxView;
@@ -59,7 +69,130 @@ export async function getOtpConfig(): Promise<OtpConfig> {
   return { mode, size };
 }
 
-/** The operator's current OPEN box (persists across sessions/days), or null. */
+export interface LineConfig {
+  mode: OtpMode;
+  size: number;
+  cartonSize: number;
+  palletSize: number;
+}
+
+/** Full line configuration (OTP box + carton + pallet sizes), admin-managed. */
+export async function getLineConfig(): Promise<LineConfig> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("app_config")
+    .select("otp_box_mode, otp_box_size, carton_size, pallet_size")
+    .eq("id", true)
+    .single();
+  return {
+    mode: (data?.otp_box_mode as OtpMode) ?? "count",
+    size: data?.otp_box_size ?? 70,
+    cartonSize: data?.carton_size ?? 40,
+    palletSize: data?.pallet_size ?? 35,
+  };
+}
+
+/**
+ * Count of items that passed step 1 (container_creation) but have NOT yet been
+ * scanned at OTP — i.e. the queue waiting to enter OTP. Count only, no codes.
+ * Line-wide (RLS lets any authenticated user read all scan_events).
+ */
+export async function getOtpWaitingCount(): Promise<number> {
+  const supabase = await createClient();
+  const [passedRes, doneRes] = await Promise.all([
+    supabase.from("scan_events").select("code").eq("stage", "container_creation").limit(20000),
+    supabase.from("scan_events").select("code").eq("stage", "otp_validation").limit(20000),
+  ]);
+  const done = new Set(((doneRes.data as { code: string }[]) ?? []).map((r) => r.code));
+  const waiting = new Set<string>();
+  for (const r of (passedRes.data as { code: string }[]) ?? []) {
+    if (!done.has(r.code)) waiting.add(r.code);
+  }
+  return waiting.size;
+}
+
+export interface OtpDoneBox {
+  boxNumber: number;
+  count: number;
+  product: string | null;
+  boxCode: string | null;
+}
+
+/**
+ * Rewrite any legacy box codes (old `BX-…` format) to the current
+ * `Icone-Box{YEAR}{NNNNNN}` format. Idempotent — a no-op once all are
+ * converted. Uses the admin client to fix every box regardless of owner.
+ */
+export async function regenerateLegacyBoxCodes(): Promise<void> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("otp_boxes")
+    .select("id, box_number, box_code, closed_at, created_at")
+    .not("box_code", "is", null);
+  const rows =
+    (data as {
+      id: string;
+      box_number: number;
+      box_code: string | null;
+      closed_at: string | null;
+      created_at: string | null;
+    }[]) ?? [];
+  for (const b of rows) {
+    if (b.box_code?.startsWith("Icone-Box")) continue; // already migrated
+    const year = new Date(b.closed_at ?? b.created_at ?? new Date()).getFullYear();
+    const boxCode = `Icone-Box${year}${String(b.box_number).padStart(6, "0")}`;
+    await admin.from("otp_boxes").update({ box_code: boxCode }).eq("id", b.id);
+  }
+}
+
+/**
+ * The station's recently completed (closed) boxes, newest first — so the
+ * "completed boxes" list survives leaving and returning to the screen.
+ * Station-wide (shared by every operator at OTP), not per-user.
+ */
+export async function getRecentOtpBoxes(limit = 20): Promise<OtpDoneBox[]> {
+  const session = await getSessionUser();
+  if (!session?.profile) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("otp_boxes")
+    .select("box_number, count, product, box_code, closed_at")
+    .eq("status", "closed")
+    .order("closed_at", { ascending: false })
+    .limit(limit);
+  return (
+    (data as { box_number: number; count: number; product: string | null; box_code: string | null }[]) ?? []
+  ).map((b) => ({
+    boxNumber: b.box_number,
+    count: b.count,
+    product: b.product,
+    boxCode: b.box_code,
+  }));
+}
+
+/**
+ * Member carte serials scanned into a (closed) box — resolved by its scannable
+ * code. Used to print the box label's per-carte barcode grid and for tracking.
+ */
+export async function getBoxLabel(boxCode: string): Promise<string[]> {
+  const c = boxCode?.trim();
+  if (!c) return [];
+  const supabase = await createClient();
+  const { data: box } = await supabase.from("otp_boxes").select("id").eq("box_code", c).maybeSingle();
+  if (!box) return [];
+  const { data: members } = await supabase
+    .from("scan_events")
+    .select("code")
+    .eq("stage", "otp_validation")
+    .contains("meta", { otp_box_id: box.id });
+  return [...new Set(((members as { code: string }[]) ?? []).map((m) => m.code))].sort();
+}
+
+/**
+ * The station's current OPEN box (persists across sessions/days), or null.
+ * Shared by every operator at OTP: one supervisor can start a box and another
+ * employee continues filling the same box — it fills by product, not by user.
+ */
 export async function getCurrentOtpBox(): Promise<OtpBoxView | null> {
   const session = await getSessionUser();
   if (!session?.profile) return null;
@@ -67,7 +200,6 @@ export async function getCurrentOtpBox(): Promise<OtpBoxView | null> {
   const { data } = await supabase
     .from("otp_boxes")
     .select("box_number, count, target, product")
-    .eq("created_by", session.userId)
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
@@ -81,11 +213,11 @@ export async function getCurrentOtpBox(): Promise<OtpBoxView | null> {
   };
 }
 
-async function nextBoxNumber(supabase: Awaited<ReturnType<typeof createClient>>, userId: string) {
+/** Next box number — a single station-wide sequence (not per-user). */
+async function nextBoxNumber(supabase: Awaited<ReturnType<typeof createClient>>) {
   const { data } = await supabase
     .from("otp_boxes")
     .select("box_number")
-    .eq("created_by", userId)
     .order("box_number", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -111,24 +243,29 @@ export async function recordOtpScan(code: string, product?: string): Promise<Otp
       error: scan.error,
       reason: scan.reason,
       expectedStage: scan.expectedStage,
+      notStarted: scan.notStarted,
     };
   }
 
-  // 2) Box accounting.
-  const cfg = await getOtpConfig();
+  // 2) Box accounting. Config + open-box are independent → fetch in parallel.
+  // Boxes are station-shared, so writes go through the admin client (RLS limits
+  // otp_boxes updates to the creator, but any operator may fill the open box).
   const supabase = await createClient();
+  const admin = createAdminClient();
   const userId = session.userId;
   const prod = product?.trim() || null;
 
-  // Current open box for this operator.
-  const { data: openBox } = await supabase
-    .from("otp_boxes")
-    .select("id, box_number, mode, target, product, count, status")
-    .eq("created_by", userId)
-    .eq("status", "open")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [cfg, openBoxRes] = await Promise.all([
+    getOtpConfig(),
+    supabase
+      .from("otp_boxes")
+      .select("id, box_number, mode, target, product, count, status")
+      .eq("status", "open")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const openBox = openBoxRes.data;
 
   type Box = {
     id: string;
@@ -143,18 +280,18 @@ export async function recordOtpScan(code: string, product?: string): Promise<Otp
 
   // Product mode: a different product closes the current box and opens a new one.
   if (box && cfg.mode === "product" && prod && box.product && box.product !== prod) {
-    await supabase
+    await admin
       .from("otp_boxes")
       .update({ status: "closed", closed_at: new Date().toISOString() })
       .eq("id", box.id);
-    await sendBoxToQc(supabase, box);
+    await sendBoxToQc(box);
     box = null;
   }
 
   // Open a fresh box if needed.
   if (!box) {
-    const box_number = await nextBoxNumber(supabase, userId);
-    const { data: created, error } = await supabase
+    const box_number = await nextBoxNumber(supabase);
+    const { data: created, error } = await admin
       .from("otp_boxes")
       .insert({
         box_number,
@@ -176,7 +313,7 @@ export async function recordOtpScan(code: string, product?: string): Promise<Otp
   const productToSet = box!.product ?? (cfg.mode === "product" ? prod : null);
   const willClose = cfg.mode === "count" && box!.target != null && newCount >= box!.target;
 
-  const { error: upErr } = await supabase
+  const { error: upErr } = await admin
     .from("otp_boxes")
     .update({
       count: newCount,
@@ -189,12 +326,12 @@ export async function recordOtpScan(code: string, product?: string): Promise<Otp
 
   // Link this unit's scan to the box (used later to advance the box's units).
   if (scan.id) {
-    const admin = createAdminClient();
     await admin.from("scan_events").update({ meta: { otp_box_id: box!.id } }).eq("id", scan.id);
   }
 
+  let boxCode: string | null = null;
   if (willClose) {
-    await sendBoxToQc(supabase, { id: box!.id, box_number: box!.box_number });
+    boxCode = await sendBoxToQc({ id: box!.id, box_number: box!.box_number });
   }
 
   return {
@@ -206,20 +343,21 @@ export async function recordOtpScan(code: string, product?: string): Promise<Otp
       count: newCount,
       target: box!.target,
       product: productToSet,
+      boxCode,
     },
   };
 }
 
-/** Manually close the operator's current open box (e.g. a partial box). */
-export async function closeOtpBox(): Promise<{ ok?: boolean; error?: string; boxNumber?: number; count?: number }> {
+/** Manually close the station's current open box (e.g. a partial box). */
+export async function closeOtpBox(): Promise<{ ok?: boolean; error?: string; boxNumber?: number; count?: number; boxCode?: string | null }> {
   const session = await getSessionUser();
   if (!session?.profile) return { error: "Not authenticated." };
   const supabase = await createClient();
+  const admin = createAdminClient();
 
   const { data: openBox } = await supabase
     .from("otp_boxes")
     .select("id, box_number, count")
-    .eq("created_by", session.userId)
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
@@ -228,20 +366,20 @@ export async function closeOtpBox(): Promise<{ ok?: boolean; error?: string; box
   if (!openBox) return { ok: true };
   if (openBox.count === 0) {
     // nothing scanned — just close, no QC needed
-    await supabase
+    await admin
       .from("otp_boxes")
       .update({ status: "closed", closed_at: new Date().toISOString() })
       .eq("id", openBox.id);
     return { ok: true, boxNumber: openBox.box_number, count: 0 };
   }
 
-  const { error } = await supabase
+  const { error } = await admin
     .from("otp_boxes")
     .update({ status: "closed", closed_at: new Date().toISOString() })
     .eq("id", openBox.id);
   if (error) return { error: error.message };
 
-  await sendBoxToQc(supabase, { id: openBox.id, box_number: openBox.box_number });
+  const boxCode = await sendBoxToQc({ id: openBox.id, box_number: openBox.box_number });
 
-  return { ok: true, boxNumber: openBox.box_number, count: openBox.count };
+  return { ok: true, boxNumber: openBox.box_number, count: openBox.count, boxCode };
 }

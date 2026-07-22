@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { cn } from "@/lib/cn";
-import { Clock, CalendarDays, Calendar, CalendarRange, ScanLine, Filter, X } from "lucide-react";
+import { WORKFLOW_STAGES } from "@/lib/workflow";
+import { Clock, CalendarDays, Calendar, CalendarRange, ScanLine, Filter, X, Layers } from "lucide-react";
 
 export interface HistScan {
   id: string;
@@ -16,6 +17,8 @@ export interface HistScan {
   stage: string;
   result: string;
   scanned_at: string;
+  /** Scanner's name — present only in the line-wide (chef/admin) view. */
+  who?: string | null;
 }
 
 type Gran = "hours" | "days" | "months" | "years";
@@ -33,20 +36,26 @@ interface Group {
   items: HistScan[];
 }
 
-export function ScanHistory({ scans }: { scans: HistScan[] }) {
+export function ScanHistory({ scans, scope = "own" }: { scans: HistScan[]; scope?: "all" | "own" }) {
   const t = useT();
   const locale = t.lang === "fr" ? "fr-FR" : t.lang === "ar" ? "ar" : "en-US";
   const [gran, setGran] = useState<Gran>("days");
   const [selected, setSelected] = useState<string | null>(null);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // Per-step separation — supervisors (line-wide view) can isolate one of the
+  // 11 workflow steps. Operators see their own scans without this control.
+  const [stage, setStage] = useState<string | null>(null);
+  const showSteps = scope === "all";
 
   // --- Range filter -----------------------------------------------------------
   const fromTs = from ? new Date(from).getTime() : null;
   const toTs = to ? new Date(to).getTime() : null;
-  const hasFilter = fromTs != null || toTs != null;
+  const hasFilter = fromTs != null || toTs != null || stage != null;
 
-  const filtered = useMemo(
+  // Date-range filter first — step counts reflect the selected range, not the
+  // currently isolated step.
+  const dateFiltered = useMemo(
     () =>
       scans.filter((s) => {
         const ts = new Date(s.scanned_at).getTime();
@@ -55,6 +64,17 @@ export function ScanHistory({ scans }: { scans: HistScan[] }) {
         return true;
       }),
     [scans, fromTs, toTs],
+  );
+
+  const stageCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of dateFiltered) m.set(s.stage, (m.get(s.stage) ?? 0) + 1);
+    return m;
+  }, [dateFiltered]);
+
+  const filtered = useMemo(
+    () => (stage ? dateFiltered.filter((s) => s.stage === stage) : dateFiltered),
+    [dateFiltered, stage],
   );
 
   function preset(kind: "today" | "7d" | "30d" | "year") {
@@ -72,6 +92,7 @@ export function ScanHistory({ scans }: { scans: HistScan[] }) {
   function clearFilter() {
     setFrom("");
     setTo("");
+    setStage(null);
     setSelected(null);
   }
 
@@ -132,7 +153,7 @@ export function ScanHistory({ scans }: { scans: HistScan[] }) {
 
   return (
     <>
-      <PageHeader title={t("history.title")} subtitle={t("history.subtitle")}>
+      <PageHeader title={t("history.title")} subtitle={t(scope === "all" ? "history.subtitleAll" : "history.subtitle")}>
         <Badge tone="accent">
           {filtered.length} {t("history.scans")}
         </Badge>
@@ -173,6 +194,54 @@ export function ScanHistory({ scans }: { scans: HistScan[] }) {
           </div>
         </div>
       </GlassCard>
+
+      {/* Per-step separation (line-wide supervisor view) — isolate any of the 11 steps */}
+      {showSteps && (
+        <GlassCard className="flex flex-col gap-3">
+          <span className="flex items-center gap-1.5 text-sm font-medium text-muted">
+            <Layers className="h-4 w-4" /> {t("history.steps")}
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => { setStage(null); setSelected(null); }}
+              className={cn(
+                "ring-accent inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors",
+                stage === null
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                  : "border-[var(--border)] bg-[var(--surface-2)] text-muted hover:border-[var(--accent)] hover:text-[var(--accent)]",
+              )}
+            >
+              {t("history.allSteps")}
+              <span className="rounded-full bg-[var(--surface)] px-1.5 py-0.5 text-[0.65rem] font-semibold text-faint">
+                {dateFiltered.length}
+              </span>
+            </button>
+            {WORKFLOW_STAGES.map((st) => {
+              const count = stageCounts.get(st) ?? 0;
+              const isActive = stage === st;
+              return (
+                <button
+                  key={st}
+                  onClick={() => { setStage(isActive ? null : st); setSelected(null); }}
+                  className={cn(
+                    "ring-accent inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors",
+                    isActive
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                      : count === 0
+                        ? "border-[var(--border)] bg-[var(--surface-2)] text-faint hover:border-[var(--accent)]"
+                        : "border-[var(--border)] bg-[var(--surface-2)] text-muted hover:border-[var(--accent)] hover:text-[var(--accent)]",
+                  )}
+                >
+                  {t(`stage.${st}` as DictKey)}
+                  <span className="rounded-full bg-[var(--surface)] px-1.5 py-0.5 text-[0.65rem] font-semibold text-faint">
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </GlassCard>
+      )}
 
       {filtered.length === 0 ? (
         <GlassCard>
@@ -227,6 +296,11 @@ export function ScanHistory({ scans }: { scans: HistScan[] }) {
                   <li key={s.id} className="flex items-center gap-3 px-5 py-2.5">
                     <ScanLine className="h-4 w-4 shrink-0 text-faint" />
                     <span className="min-w-0 flex-1 truncate font-mono text-sm text-foreground">{s.code}</span>
+                    {s.who && (
+                      <span className="hidden whitespace-nowrap text-xs text-muted sm:inline">
+                        {t("history.by")} {s.who}
+                      </span>
+                    )}
                     <Badge tone="accent">{t(`stage.${s.stage}` as DictKey)}</Badge>
                     <span className="whitespace-nowrap text-xs text-faint">
                       {new Date(s.scanned_at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}

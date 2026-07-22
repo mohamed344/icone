@@ -10,7 +10,7 @@ export default async function EditEmployeePage({ params }: { params: Promise<{ i
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, full_name, employee_code, role, status, allowed_stations")
+    .select("id, full_name, employee_code, role, status, allowed_stations, permissions")
     .eq("id", id)
     .single();
 

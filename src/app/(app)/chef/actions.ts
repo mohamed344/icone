@@ -2,8 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { getSessionUser } from "@/lib/auth/session";
+import { getSessionUser, requireUser } from "@/lib/auth/session";
 import { roleCan } from "@/lib/auth/permissions";
+import { getWaitingByStep, type StepWaiting } from "@/lib/chef/waiting";
+
+/** Live "waiting per step" snapshot — polled by the supervisor panel so the
+ *  counts update as codes are scanned onward, without a manual page refresh. */
+export async function fetchWaitingByStep(): Promise<StepWaiting[]> {
+  await requireUser();
+  return getWaitingByStep();
+}
 
 export interface OverrideResult {
   ok?: boolean;

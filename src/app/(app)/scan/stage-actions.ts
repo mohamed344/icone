@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionUser } from "@/lib/auth/session";
 import { notify, operatorIdsAtStage } from "@/lib/notify";
 import { nextEnabledStage } from "@/lib/auth/steps";
-import { FIRST_UNIT_STAGE, type WorkflowStage } from "@/lib/workflow";
+import { FIRST_UNIT_STAGE, isSupervisor, type WorkflowStage } from "@/lib/workflow";
 import type { QcBox } from "./qc1-actions";
 
 interface Row {
@@ -80,7 +80,7 @@ export async function passBox(boxId: string): Promise<PassResult> {
 
   const stage = box.current_stage as WorkflowStage;
   const stations = (p.allowed_stations as string[]) ?? [];
-  if (p.role !== "admin" && !stations.includes(stage) && p.station !== stage) {
+  if (!isSupervisor(p.role) && !stations.includes(stage) && p.station !== stage) {
     return { error: "This station is not assigned to you." };
   }
 

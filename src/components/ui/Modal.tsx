@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { X } from "lucide-react";
 
@@ -15,6 +16,9 @@ interface ModalProps {
 }
 
 export function Modal({ open, onClose, title, children, dismissible = true, className }: ModalProps) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -28,9 +32,11 @@ export function Modal({ open, onClose, title, children, dismissible = true, clas
     };
   }, [open, dismissible, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  // Portal to <body> so it sits outside #app-shell — lets print CSS hide the
+  // app and print only the dialog's label on a single page.
+  return createPortal(
     <div className="fixed inset-0 z-[100] grid place-items-center p-4">
       <div
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
@@ -61,6 +67,7 @@ export function Modal({ open, onClose, title, children, dismissible = true, clas
         )}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getQc1Queue,
@@ -8,23 +8,23 @@ import {
   qc1Decision,
   type QcBox,
 } from "@/app/(app)/scan/qc1-actions";
-import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT } from "@/lib/i18n";
+import { notFoundMessage } from "@/lib/scan/locate";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import { ToolScanField } from "./ToolScanField";
 import { cn } from "@/lib/cn";
-import { Boxes, Keyboard, Loader2, CheckCircle2, XCircle, AlertCircle, ScanLine } from "lucide-react";
+import { Boxes, Loader2, CheckCircle2, XCircle, AlertCircle, ScanLine } from "lucide-react";
 
 type Decision = "conform" | "non_conform";
 
 export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
   const t = useT();
   const router = useRouter();
-  const { onBoxReady } = useNotifications();
 
   const [queue, setQueue] = useState<QcBox[]>(initialQueue);
   const [target, setTarget] = useState<QcBox | null>(null);
@@ -34,9 +34,6 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
   const [error, setError] = useState<string | null>(null);
   const [scanErr, setScanErr] = useState<string | null>(null);
 
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
-  const timerRef = useRef<number | null>(null);
-
   async function refresh() {
     try {
       setQueue(await getQc1Queue());
@@ -45,23 +42,12 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
     }
   }
 
-  // Live: when a box_ready arrives, refresh the queue and auto-open its modal.
-  useEffect(() => {
-    return onBoxReady((n) => {
-      void (async () => {
-        const q = await getQc1Queue();
-        setQueue(q);
-        const box = q.find((b) => b.id === n.box_id);
-        if (box && !target) openModal(box);
-      })();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onBoxReady, target]);
-
   function openModal(box: QcBox) {
     setTarget(box);
     setDecision("conform");
-    setReason("");
+    // A box in rework carries its previous rejection reason — prefill it so the
+    // operator sees why it was rejected (and can keep it if still non-conform).
+    setReason(box.state === "rework" ? (box.reason ?? "") : "");
     setError(null);
   }
 
@@ -71,33 +57,10 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
     setScanErr(null);
     const box = queue.find((b) => b.boxCode === trimmed) ?? (await findAwaitingBoxByCode(trimmed));
     if (!box) {
-      setScanErr(t("qc1.notFound"));
+      setScanErr(await notFoundMessage(t, trimmed, "qc1.notFound"));
       return;
     }
     openModal(box);
-  }
-
-  function finalizeScan() {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const el = taRef.current;
-    const raw = el?.value ?? "";
-    if (el) el.value = "";
-    void scanBox(raw);
-    el?.focus();
-  }
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      timerRef.current = window.setTimeout(finalizeScan, 90);
-    }
   }
 
   async function confirm() {
@@ -127,9 +90,9 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
         </Badge>
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         {/* Scan to open */}
-        <GlassCard className="lg:col-span-3">
+        <GlassCard className="">
           <div className="mb-4 flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded-2xl bg-accent-gradient text-[var(--accent-contrast)] glow">
               <ScanLine className="h-5 w-5" />
@@ -140,22 +103,14 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
             </div>
           </div>
 
-          <div className="flex items-end gap-2">
-            <div className="relative flex-1">
-              <Keyboard className="pointer-events-none absolute start-3 top-3.5 h-4 w-4 text-faint" />
-              <textarea
-                ref={taRef}
-                rows={1}
-                onKeyDown={onKeyDown}
-                onChange={() => setScanErr(null)}
-                placeholder={t("qc1.scanBox")}
-                autoFocus
-                spellCheck={false}
-                className="ring-accent min-h-[2.75rem] w-full resize-none rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-2.5 ps-10 pe-4 font-mono text-sm text-foreground placeholder:text-faint focus:border-[var(--accent)]"
-              />
-            </div>
-            <Button onClick={finalizeScan}>{t("scan.record")}</Button>
-          </div>
+          <ToolScanField
+            onScan={(c) => {
+              setScanErr(null);
+              void scanBox(c);
+            }}
+            busy={busy}
+            placeholder={t("qc1.scanBox")}
+          />
           {scanErr && (
             <div className="mt-3 flex items-start gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-600 dark:text-rose-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -164,38 +119,63 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
           )}
         </GlassCard>
 
-        {/* Queue */}
-        <GlassCard padded={false} className="overflow-hidden lg:col-span-2">
+        {/* Queue — count only (box codes are hidden; scan the box to act on it) */}
+        <GlassCard padded={false} className="overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
             <h3 className="font-display font-semibold text-foreground">{t("qc1.queue")}</h3>
             <button onClick={refresh} className="ring-accent rounded-lg px-2 py-1 text-xs text-muted hover:text-[var(--accent)]">
               {t("qc1.refresh")}
             </button>
           </div>
-          {queue.length === 0 ? (
-            <div className="py-10 text-center text-sm text-faint">{t("qc1.empty")}</div>
-          ) : (
-            <ul className="max-h-[28rem] divide-y divide-[var(--border)] overflow-y-auto">
-              {queue.map((b) => (
-                <li key={b.id}>
-                  <button
-                    onClick={() => openModal(b)}
-                    className="ring-accent flex w-full items-center gap-3 px-5 py-3 text-start transition-colors hover:bg-[var(--surface-2)]"
-                  >
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                      <Boxes className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-sm text-foreground">{b.boxCode ?? `#${b.boxNumber}`}</div>
-                      <div className="text-xs text-faint">
-                        {b.count} {t("otp.units")}
-                        {b.product ? ` · ${b.product}` : ""}
-                      </div>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+          <div className="flex flex-col items-center justify-center gap-2 px-5 py-12 text-center">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
+              <Boxes className="h-6 w-6" />
+            </span>
+            <span className="font-display text-4xl font-semibold text-foreground">{queue.length}</span>
+            <span className="text-sm text-muted">{t("qc1.waitingCount")}</span>
+            {queue.some((b) => b.state === "rework") && (
+              <Badge tone="warning">
+                {queue.filter((b) => b.state === "rework").length} {t("qc1.reworkBadge")}
+              </Badge>
+            )}
+          </div>
+
+          {/* Non-conform boxes stay here in rework: unlike fresh boxes (hidden,
+              scan-to-act), these are shown so the chef can reopen, fix and pass them. */}
+          {queue.some((b) => b.state === "rework") && (
+            <div className="border-t border-[var(--border)] px-5 py-4">
+              <div className="mb-2.5 flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                <AlertCircle className="h-3.5 w-3.5" /> {t("qc1.reworkList")}
+              </div>
+              <ul className="space-y-2">
+                {queue
+                  .filter((b) => b.state === "rework")
+                  .map((b) => (
+                    <li key={b.id}>
+                      <button
+                        type="button"
+                        onClick={() => openModal(b)}
+                        className="ring-accent flex w-full items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-start transition-colors hover:border-amber-500/60"
+                      >
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                          <Boxes className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-mono text-sm font-semibold text-foreground">
+                            {b.boxCode ?? `#${b.boxNumber}`}
+                          </div>
+                          <div className="truncate text-xs text-faint">
+                            {b.count} {t("otp.units")}
+                            {b.product ? ` · ${b.product}` : ""}
+                            {b.reason ? ` · ${b.reason}` : ""}
+                          </div>
+                        </div>
+                        <Badge tone="warning">{t("qc1.reworkBadge")}</Badge>
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </div>
           )}
         </GlassCard>
       </div>
@@ -218,6 +198,16 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
                 </div>
               </div>
             </div>
+
+            {target.state === "rework" && (
+              <div className="flex items-start gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-700 dark:text-amber-400">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  {t("qc1.previouslyRejected")}
+                  {target.reason ? ` — ${target.reason}` : ""}
+                </span>
+              </div>
+            )}
 
             <SegmentedControl<Decision>
               value={decision}

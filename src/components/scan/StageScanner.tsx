@@ -1,17 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { getStageQueue, findBoxAtStageByCode, passBox } from "@/app/(app)/scan/stage-actions";
 import type { QcBox } from "@/app/(app)/scan/qc1-actions";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT, type DictKey } from "@/lib/i18n";
+import { notFoundMessage } from "@/lib/scan/locate";
 import type { WorkflowStage } from "@/lib/workflow";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { Boxes, Keyboard, Loader2, CheckCircle2, AlertCircle, ScanLine, PackageCheck } from "lucide-react";
+import { ToolScanField } from "./ToolScanField";
+import { Boxes, Loader2, CheckCircle2, AlertCircle, ScanLine, PackageCheck } from "lucide-react";
 
 export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; initialQueue: QcBox[] }) {
   const t = useT();
@@ -23,9 +25,6 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [, startPass] = useTransition();
-
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
-  const timerRef = useRef<number | null>(null);
 
   async function refresh() {
     try {
@@ -71,33 +70,10 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
     setError(null);
     const box = queue.find((b) => b.boxCode === trimmed) ?? (await findBoxAtStageByCode(stage, trimmed));
     if (!box) {
-      setError(t("stagework.notFound"));
+      setError(await notFoundMessage(t, trimmed, "stagework.notFound"));
       return;
     }
     pass(box);
-  }
-
-  function finalizeScan() {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const el = taRef.current;
-    const raw = el?.value ?? "";
-    if (el) el.value = "";
-    void scan(raw);
-    el?.focus();
-  }
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      timerRef.current = window.setTimeout(finalizeScan, 90);
-    }
   }
 
   return (
@@ -108,9 +84,9 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
         </Badge>
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
         {/* Scan to receive */}
-        <GlassCard className="lg:col-span-3">
+        <GlassCard className="">
           <div className="mb-4 flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded-2xl bg-accent-gradient text-[var(--accent-contrast)] glow">
               <ScanLine className="h-5 w-5" />
@@ -121,22 +97,13 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
             </div>
           </div>
 
-          <div className="flex items-end gap-2">
-            <div className="relative flex-1">
-              <Keyboard className="pointer-events-none absolute start-3 top-3.5 h-4 w-4 text-faint" />
-              <textarea
-                ref={taRef}
-                rows={1}
-                onKeyDown={onKeyDown}
-                onChange={() => setError(null)}
-                placeholder={t("stagework.scanBox")}
-                autoFocus
-                spellCheck={false}
-                className="ring-accent min-h-[2.75rem] w-full resize-none rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] py-2.5 ps-10 pe-4 font-mono text-sm text-foreground placeholder:text-faint focus:border-[var(--accent)]"
-              />
-            </div>
-            <Button onClick={finalizeScan}>{t("scan.record")}</Button>
-          </div>
+          <ToolScanField
+            onScan={(c) => {
+              setError(null);
+              void scan(c);
+            }}
+            placeholder={t("stagework.scanBox")}
+          />
 
           {okMsg && (
             <div className="mt-3 flex items-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
@@ -153,7 +120,7 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
         </GlassCard>
 
         {/* Queue */}
-        <GlassCard padded={false} className="overflow-hidden lg:col-span-2">
+        <GlassCard padded={false} className="overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
             <h3 className="font-display font-semibold text-foreground">{t("stagework.queue")}</h3>
             <button onClick={refresh} className="ring-accent rounded-lg px-2 py-1 text-xs text-muted hover:text-[var(--accent)]">

@@ -9,6 +9,9 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Button } from "@/components/ui/Button";
 import { Badge, type Tone } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
+import { SearchInput } from "@/components/ui/SearchInput";
+import { Pagination } from "@/components/ui/Pagination";
+import { usePagedList } from "@/lib/ui/use-paged-list";
 import { deleteEmployee } from "@/app/(app)/admin/employees/actions";
 import type { Role, WorkflowStage } from "@/lib/workflow";
 import { UserPlus, Eye, Pencil, Trash2, Loader2 } from "lucide-react";
@@ -63,6 +66,10 @@ function DeleteButton({ id, name }: { id: string; name: string }) {
 
 export function EmployeesList({ employees }: { employees: EmployeeRow[] }) {
   const t = useT();
+  const list = usePagedList(
+    employees,
+    (e) => `${e.full_name ?? ""} ${e.employee_code ?? ""} ${e.role} ${e.status}`,
+  );
 
   return (
     <>
@@ -74,6 +81,10 @@ export function EmployeesList({ employees }: { employees: EmployeeRow[] }) {
           </Button>
         </Link>
       </PageHeader>
+
+      <div className="mb-4">
+        <SearchInput value={list.query} onChange={list.setQuery} />
+      </div>
 
       <GlassCard padded={false} className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -88,7 +99,7 @@ export function EmployeesList({ employees }: { employees: EmployeeRow[] }) {
               </tr>
             </thead>
             <tbody>
-              {employees.map((e) => (
+              {list.pageItems.map((e) => (
                 <tr key={e.id} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--surface-2)]">
                   <td className="px-5 py-3">
                     <Link href={`/admin/employees/${e.id}`} className="flex items-center gap-3">
@@ -127,16 +138,28 @@ export function EmployeesList({ employees }: { employees: EmployeeRow[] }) {
                   </td>
                 </tr>
               ))}
-              {employees.length === 0 && (
+              {list.total === 0 && (
                 <tr>
                   <td colSpan={5} className="px-5 py-12 text-center text-sm text-faint">
-                    {t("common.empty")}
+                    {list.query ? t("common.noResults") : t("common.empty")}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        {list.total > 0 && (
+          <div className="border-t border-[var(--border)] px-5 py-3">
+            <Pagination
+              page={list.page}
+              pageCount={list.pageCount}
+              from={list.from}
+              to={list.to}
+              total={list.total}
+              onPage={list.setPage}
+            />
+          </div>
+        )}
       </GlassCard>
     </>
   );

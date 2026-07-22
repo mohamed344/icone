@@ -10,6 +10,7 @@ export const WORKFLOW_STAGES = [
   "serial_linking",
   "scan_test",
   "ng_handling",
+  "reparation",
   "rescan_reprint",
   "carton_printing",
   "qc2_final",
@@ -20,6 +21,13 @@ export type WorkflowStage = (typeof WORKFLOW_STAGES)[number];
 export const ROLES = ["operator", "chef_de_ligne", "admin"] as const;
 export type Role = (typeof ROLES)[number];
 
+/**
+ * Supervisor roles may act at ANY station (no allowed_stations restriction),
+ * like admin. Sequential-order enforcement still applies.
+ */
+export const isSupervisor = (role?: Role | null): boolean =>
+  role === "admin" || role === "chef_de_ligne";
+
 /** First per-unit stage: the box "dissolves" into individual products here. */
 export const FIRST_UNIT_STAGE: WorkflowStage = "serial_linking";
 /** Stages that operate on individual products (steps 5+). */
@@ -27,6 +35,7 @@ export const UNIT_STAGES: WorkflowStage[] = [
   "serial_linking",
   "scan_test",
   "ng_handling",
+  "reparation",
   "rescan_reprint",
   "carton_printing",
   "qc2_final",
@@ -41,10 +50,11 @@ export const STAGE_ENTITY: Record<WorkflowStage, EntityType> = {
   container_creation: "container",
   otp_validation: "container",
   qc1_box: "box",
-  reception: "item",
+  reception: "box",
   serial_linking: "item",
   scan_test: "item",
   ng_handling: "item",
+  reparation: "item",
   rescan_reprint: "box",
   carton_printing: "carton",
   qc2_final: "item",
@@ -58,6 +68,7 @@ export type UserStatus = (typeof USER_STATUSES)[number];
 export const PERMISSIONS = [
   "scan",
   "override_qc",
+  "approve_rejected",
   "bypass_sequence",
   "manage_stock",
   "create_containers",

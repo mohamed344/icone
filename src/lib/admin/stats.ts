@@ -14,6 +14,48 @@ export interface ScanStats {
   recent: { code: string; stage: WorkflowStage; at: string; who: string }[];
 }
 
+export interface StockStats {
+  inStock: number;
+  cartons: number;
+  pallets: number;
+  enteredToday: number;
+  recent: { code: string | null; model: string | null; count: number }[];
+}
+
+/** End-of-line stock metrics: products in stock, cartons, pallets, entries today. */
+export async function getStockStats(): Promise<StockStats> {
+  const supabase = await createClient();
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+
+  const [inStockRes, cartonsRes, palletsRes, todayRes, recentRes] = await Promise.all([
+    supabase.from("pipeline_units").select("id", { count: "exact", head: true }).eq("status", "done"),
+    // Cartons produced (closed), and only COMPLETE pallets (an open pallet that
+    // is still accumulating cartons shouldn't count as a pallet yet).
+    supabase.from("pipeline_cartons").select("id", { count: "exact", head: true }).eq("status", "closed"),
+    supabase.from("pipeline_pallets").select("id", { count: "exact", head: true }).eq("status", "closed"),
+    supabase
+      .from("scan_events")
+      .select("id", { count: "exact", head: true })
+      .eq("stage", "stock_entry")
+      .gte("scanned_at", startToday.toISOString()),
+    supabase
+      .from("pipeline_cartons")
+      .select("code, model, count")
+      .eq("stock_entered", true)
+      .order("closed_at", { ascending: false })
+      .limit(8),
+  ]);
+
+  return {
+    inStock: inStockRes.count ?? 0,
+    cartons: cartonsRes.count ?? 0,
+    pallets: palletsRes.count ?? 0,
+    enteredToday: todayRes.count ?? 0,
+    recent: (recentRes.data as { code: string | null; model: string | null; count: number }[]) ?? [],
+  };
+}
+
 /** Aggregates scan_events over the last `days` days (admin sees all via RLS). */
 export async function getScanStats(days = 14): Promise<ScanStats> {
   const supabase = await createClient();
@@ -47,7 +89,8 @@ export async function getScanStats(days = 14): Promise<ScanStats> {
     const d = new Date(startToday);
     d.setDate(d.getDate() - i);
     dayKeys.push(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`);
-    labels.push(`${d.getMonth() + 1}/${d.getDate()}`);
+    // e.g. "13 Jul" — unambiguous (avoids the fraction-looking "7/13").
+    labels.push(new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(d));
   }
   const dayIndex = new Map(dayKeys.map((k, i) => [k, i]));
   const values = new Array(days).fill(0);

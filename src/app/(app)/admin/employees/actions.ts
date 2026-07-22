@@ -40,13 +40,17 @@ export async function saveEmployee(_prev: EmployeeState, formData: FormData): Pr
 
   const primaryStation: WorkflowStage | null = allowedStations[0] ?? null;
 
-  // Permissions are managed per role (see /admin/roles), not per employee.
+  // Most permissions are managed per role (see /admin/roles). `approve_rejected`
+  // is delegated per employee here (admins have it inherently).
+  const approveRejected = formData.get("approve_rejected") != null;
+
   const profileFields = {
     full_name: fullName || null,
     employee_code: employeeCode || null,
     role,
     station: primaryStation,
     allowed_stations: allowedStations,
+    permissions: { approve_rejected: approveRejected },
     status,
   };
 

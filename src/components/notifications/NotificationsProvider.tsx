@@ -10,7 +10,7 @@ import {
 } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getNotifications, markAllRead as markAllReadAction, markRead as markReadAction, type Notif } from "@/app/(app)/notifications/actions";
-import { beep, ensureAudioUnlocked } from "@/lib/sound";
+import { notifyChime, ensureAudioUnlocked } from "@/lib/sound";
 
 export interface Toast {
   id: string;
@@ -18,6 +18,7 @@ export interface Toast {
   title: string;
   body: string | null;
   stage: string | null;
+  created_at: string;
 }
 
 interface Ctx {
@@ -50,7 +51,7 @@ export function NotificationsProvider({ userId, children }: { userId: string; ch
   }, []);
 
   const pushToast = useCallback((n: Notif) => {
-    const toast: Toast = { id: n.id, type: n.type, title: n.title, body: n.body, stage: n.stage };
+    const toast: Toast = { id: n.id, type: n.type, title: n.title, body: n.body, stage: n.stage, created_at: n.created_at };
     setToasts((t) => [toast, ...t].slice(0, 4));
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== toast.id)), 7000);
   }, []);
@@ -68,7 +69,7 @@ export function NotificationsProvider({ userId, children }: { userId: string; ch
           const n = payload.new as Notif;
           setItems((prev) => (prev.some((p) => p.id === n.id) ? prev : [n, ...prev].slice(0, 50)));
           pushToast(n);
-          beep();
+          notifyChime(n.type);
           anyCbs.current.forEach((cb) => cb(n));
           if (n.type === "box_ready") boxReadyCbs.current.forEach((cb) => cb(n));
         },
