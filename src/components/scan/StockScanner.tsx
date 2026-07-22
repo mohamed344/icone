@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { stockEntry, getStockWaitingCount, type StockDone } from "@/app/(app)/scan/carton-actions";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT } from "@/lib/i18n";
 import { notFoundMessage } from "@/lib/scan/locate";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -20,6 +21,7 @@ export function StockScanner({
 }) {
   const t = useT();
   const router = useRouter();
+  const { onAny } = useNotifications();
 
   const [waiting, setWaiting] = useState(initialWaiting);
   const [recent, setRecent] = useState<StockDone[]>(initialRecent);
@@ -34,6 +36,14 @@ export function StockScanner({
       /* ignore */
     }
   }
+
+  // Live: bump the waiting count when a carton/pallet becomes ready for Stock.
+  useEffect(() => {
+    return onAny((n) => {
+      if (n.stage === "stock_entry") void refreshWaiting();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onAny]);
 
   async function scan(code: string) {
     const c = code.trim();

@@ -574,6 +574,18 @@ async function addCartonToPallet(admin: Admin, supabase: Db, cartonId: string, b
     patch.code = `Icone-Palette${year}${String(pallet.pallet_number).padStart(6, "0")}`;
   }
   await admin.from("pipeline_pallets").update(patch).eq("id", pallet.id);
+
+  // A completed pallet is ready for Stock — tell the Stock operators (its code).
+  if (willClose) {
+    await notify(
+      await operatorIdsAtStage("stock_entry"),
+      "box_arrived",
+      pallet.id,
+      patch.code as string,
+      undefined,
+      "stock_entry",
+    );
+  }
 }
 
 /** Apply an approve/reject decision to a carton (shared by operator + chef). */

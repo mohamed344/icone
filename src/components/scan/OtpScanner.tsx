@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { recordOtpScan, closeOtpBox, getOtpWaitingCount, getBoxLabel, type OtpConfig, type OtpBoxView } from "@/app/(app)/scan/otp-actions";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT } from "@/lib/i18n";
 import { parseScan } from "@/lib/scan/parse-scan";
 import { seqScanErrorMessage } from "@/lib/scan/scan-error";
@@ -13,8 +14,7 @@ import { Modal } from "@/components/ui/Modal";
 import { printSoon } from "@/lib/print/use-auto-print";
 import { BoxLabel } from "./BoxLabel";
 import { ToolScanField } from "./ToolScanField";
-import { cn } from "@/lib/cn";
-import { Boxes, CheckCircle2, AlertCircle, PackageCheck, Package, Hourglass, Printer, Barcode as BarcodeIcon } from "lucide-react";
+import { Boxes, CheckCircle2, AlertCircle, PackageCheck, Package, Hourglass, Printer } from "lucide-react";
 
 interface DoneBox {
   boxNumber: number;
@@ -27,15 +27,14 @@ export function OtpScanner({
   config,
   initialBox = null,
   initialWaiting = 0,
-  initialDone = [],
 }: {
   config: OtpConfig;
   initialBox?: OtpBoxView | null;
   initialWaiting?: number;
-  initialDone?: DoneBox[];
 }) {
   const t = useT();
   const isCount = config.mode === "count";
+  const { onAny } = useNotifications();
 
   const [waiting, setWaiting] = useState(initialWaiting);
   async function refreshWaiting() {
@@ -46,11 +45,18 @@ export function OtpScanner({
     }
   }
 
+  // Live: bump the "waiting to enter OTP" count as units pass Scan PCBA.
+  useEffect(() => {
+    return onAny((n) => {
+      if (n.stage === "otp_validation") void refreshWaiting();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onAny]);
+
   const [product, setProduct] = useState(initialBox?.product ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState<OtpBoxView | null>(initialBox);
-  const [done, setDone] = useState<DoneBox[]>(initialDone);
   const [lastCode, setLastCode] = useState<string | null>(null);
   const [flashClosed, setFlashClosed] = useState<number | null>(null);
   // The closed box whose printable barcode ticket is shown (auto-opens on close).
@@ -97,7 +103,6 @@ export function OtpScanner({
           product: res.box.product,
           boxCode: res.box.boxCode ?? null,
         };
-        setDone((d) => [closed, ...d].slice(0, 20));
         setFlashClosed(res.box.boxNumber);
         // Box finished → show its barcode ticket and print it automatically.
         if (closed.boxCode) void openLabel(closed, true);
@@ -120,7 +125,6 @@ export function OtpScanner({
         product: current?.product ?? null,
         boxCode: res.boxCode ?? null,
       };
-      setDone((d) => [closed, ...d].slice(0, 20));
       // Box finished → show its barcode ticket and print it automatically.
       if (closed.boxCode) void openLabel(closed, true);
     }
@@ -238,51 +242,6 @@ export function OtpScanner({
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
-          )}
-        </GlassCard>
-
-        {/* Completed boxes */}
-        <GlassCard className="">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-display text-lg font-semibold text-foreground">{t("otp.completed")}</h3>
-            <span className="text-xs text-faint">{done.length}</span>
-          </div>
-          {done.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-[var(--border)] py-10 text-center text-sm text-faint">
-              {t("otp.noBoxes")}
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {done.map((b, i) => (
-                <li key={i}>
-                  <button
-                    type="button"
-                    onClick={() => b.boxCode && openLabel(b, false)}
-                    disabled={!b.boxCode}
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-start transition-colors",
-                      b.boxCode ? "ring-accent hover:border-[var(--accent)]" : "cursor-default",
-                    )}
-                  >
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                      <Boxes className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-foreground">
-                        {t("otp.box")} #{b.boxNumber}
-                      </div>
-                      {b.boxCode && (
-                        <div className="flex items-center gap-1 truncate font-mono text-xs text-[var(--accent)]">
-                          <BarcodeIcon className="h-3 w-3 shrink-0" /> {b.boxCode}
-                        </div>
-                      )}
-                      {b.product && <div className="truncate text-xs text-faint">{b.product}</div>}
-                    </div>
-                    <Badge tone="success">{b.count} {t("otp.units")}</Badge>
-                  </button>
-                </li>
-              ))}
-            </ul>
           )}
         </GlassCard>
       </div>

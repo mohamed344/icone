@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   getQc2Queue,
@@ -8,6 +8,7 @@ import {
   type QcCarton,
   type Qc2HistoryCarton,
 } from "@/app/(app)/scan/carton-actions";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT } from "@/lib/i18n";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -118,6 +119,7 @@ export function Qc2Scanner({
 }) {
   const t = useT();
   const router = useRouter();
+  const { onAny } = useNotifications();
 
   const [queue, setQueue] = useState<QcCarton[]>(initialQueue);
   const [history, setHistory] = useState<Qc2HistoryCarton[]>(initialHistory);
@@ -129,6 +131,14 @@ export function Qc2Scanner({
       /* ignore */
     }
   }
+
+  // Live: refresh the pending list whenever a carton reaches QC#2.
+  useEffect(() => {
+    return onAny((n) => {
+      if (n.stage === "qc2_final") void refresh();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onAny]);
 
   function onDone(carton: QcCarton, decision: "approved" | "rejected") {
     setQueue((q) => q.filter((c) => c.id !== carton.id));

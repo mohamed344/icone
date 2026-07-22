@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   getQc1Queue,
@@ -8,6 +8,7 @@ import {
   qc1Decision,
   type QcBox,
 } from "@/app/(app)/scan/qc1-actions";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { useT } from "@/lib/i18n";
 import { notFoundMessage } from "@/lib/scan/locate";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -25,6 +26,7 @@ type Decision = "conform" | "non_conform";
 export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
   const t = useT();
   const router = useRouter();
+  const { onAny } = useNotifications();
 
   const [queue, setQueue] = useState<QcBox[]>(initialQueue);
   const [target, setTarget] = useState<QcBox | null>(null);
@@ -41,6 +43,14 @@ export function Qc1Scanner({ initialQueue }: { initialQueue: QcBox[] }) {
       /* ignore */
     }
   }
+
+  // Live: refresh the queue whenever a box is sent to QC#1.
+  useEffect(() => {
+    return onAny((n) => {
+      if (n.stage === "qc1_box") void refresh();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onAny]);
 
   function openModal(box: QcBox) {
     setTarget(box);

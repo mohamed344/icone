@@ -22,7 +22,7 @@ async function sendBoxToQc(box: { id: string; box_number: number }): Promise<str
     .update({ box_code: boxCode, qc_state: "awaiting" })
     .eq("id", box.id);
   const qcIds = await qc1OperatorIds();
-  await notify(qcIds, "box_ready", box.id, boxCode);
+  await notify(qcIds, "box_ready", box.id, boxCode, undefined, "qc1_box");
   return boxCode;
 }
 

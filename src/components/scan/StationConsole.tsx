@@ -16,7 +16,6 @@ import {
   getLineConfig,
   getCurrentOtpBox,
   getOtpWaitingCount,
-  getRecentOtpBoxes,
   regenerateLegacyBoxCodes,
 } from "@/app/(app)/scan/otp-actions";
 import { getQc1Queue } from "@/app/(app)/scan/qc1-actions";
@@ -49,20 +48,12 @@ export async function StationConsole({ station }: { station: WorkflowStage }) {
   // ---- Box stations ----------------------------------------------------------
   if (station === "otp_validation") {
     await regenerateLegacyBoxCodes(); // self-heal old BX-… codes to the new format
-    const [config, currentBox, waiting, recentBoxes] = await Promise.all([
+    const [config, currentBox, waiting] = await Promise.all([
       getOtpConfig(),
       getCurrentOtpBox(),
       getOtpWaitingCount(),
-      getRecentOtpBoxes(),
     ]);
-    return (
-      <OtpScanner
-        config={config}
-        initialBox={currentBox}
-        initialWaiting={waiting}
-        initialDone={recentBoxes}
-      />
-    );
+    return <OtpScanner config={config} initialBox={currentBox} initialWaiting={waiting} />;
   }
 
   if (station === "qc1_box") {
