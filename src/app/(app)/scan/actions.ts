@@ -2,10 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getSessionUser, type WorkflowStage } from "@/lib/auth/session";
-import { roleCan } from "@/lib/auth/permissions";
-import { getEnabledStages } from "@/lib/auth/steps";
-import { authorizeScan } from "@/lib/scan/guard";
-import { WORKFLOW_STAGES, type EntityType } from "@/lib/workflow";
+import { type EntityType } from "@/lib/workflow";
 
 export type { EntityType } from "@/lib/workflow";
 
@@ -29,13 +26,6 @@ export interface ScanResult {
   notStarted?: boolean;
   /** On success: the step this product moves to next (null = finished). */
   nextStage?: WorkflowStage | null;
-}
-
-function nextEnabledAfter(stage: WorkflowStage, enabledSet: Set<WorkflowStage>): WorkflowStage | null {
-  for (let i = WORKFLOW_STAGES.indexOf(stage) + 1; i < WORKFLOW_STAGES.length; i++) {
-    if (enabledSet.has(WORKFLOW_STAGES[i])) return WORKFLOW_STAGES[i];
-  }
-  return null;
 }
 
 export interface StageScanRow {
@@ -153,77 +143,21 @@ export async function recordScan(input: ScanInput): Promise<ScanResult> {
   const code = input.code?.trim();
   if (!code) return { error: "Empty code." };
 
-  // Fire the station-config read immediately; it is independent of the caller
-  // and overlaps the auth check below instead of running after it.
-  const enabledStagesP = getEnabledStages();
+  const supabase = await createClient();
 
-  const guard = await authorizeScan(input.stage);
-  if (!guard.ok) {
-    void enabledStagesP; // settled independently; nothing to do on the error path
-    return { error: guard.error };
-  }
-  const { profile, userId, supabase } = guard;
-
-  // Remaining reads are independent → they resolve concurrently.
-  // `bypass_sequence` reuses the role_settings row already cached by authorizeScan.
-  // The last-event lookup is served by idx_scan_events_code_time (an index seek,
-  // not a full audit-log scan). Promise.resolve kicks off the lazy query builder.
-  const lastEventP = Promise.resolve(
-    supabase
-      .from("scan_events")
-      .select("stage")
-      .eq("code", code)
-      .order("scanned_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  );
-  const [enabledStages, canBypass] = await Promise.all([
-    enabledStagesP,
-    roleCan(profile.role, "bypass_sequence"),
-  ]);
-  const enabledSet = new Set(enabledStages);
-
-  // ---- Sequential enforcement: a product advances 1 → 11 without skipping.
-  // Disabled steps are auto-skipped; bypass_sequence (and admin) may scan freely.
-  if (!canBypass) {
-    if (!enabledSet.has(input.stage)) return { reason: "step_off" };
-
-    const { data: last } = await lastEventP;
-    const lastStage = last?.stage as WorkflowStage | undefined;
-    const startPos = lastStage ? WORKFLOW_STAGES.indexOf(lastStage) : -1;
-
-    let expected: WorkflowStage | null = null;
-    for (let i = startPos + 1; i < WORKFLOW_STAGES.length; i++) {
-      if (enabledSet.has(WORKFLOW_STAGES[i])) {
-        expected = WORKFLOW_STAGES[i];
-        break;
-      }
-    }
-
-    if (expected === null) return { reason: "completed" };
-    if (input.stage !== expected)
-      return { reason: "out_of_order", expectedStage: expected, notStarted: lastStage === undefined };
-  }
-
-  const { data, error } = await supabase
-    .from("scan_events")
-    .insert({
-      stage: input.stage,
-      entity_type: input.entityType,
-      code,
-      result: input.result ?? "ok",
-      scanned_by: userId,
-      meta: input.meta ?? {},
-    })
-    .select("id, scanned_at")
-    .single();
+  // One round-trip: the `record_scan` RPC does auth, the station check, the
+  // sequential-order check and the insert entirely inside Postgres (every read
+  // is a local index lookup). This replaces ~4 sequential network hops — the
+  // dominant cost when the DB region is far from the operator. See
+  // supabase/migrations/0018_record_scan_rpc.sql.
+  const { data, error } = await supabase.rpc("record_scan", {
+    p_stage: input.stage,
+    p_code: code,
+    p_entity_type: input.entityType,
+    p_result: input.result ?? "ok",
+    p_meta: input.meta ?? {},
+  });
 
   if (error) return { error: error.message };
-
-  return {
-    ok: true,
-    id: data.id,
-    at: data.scanned_at,
-    nextStage: nextEnabledAfter(input.stage, enabledSet),
-  };
+  return (data as ScanResult | null) ?? { error: "Scan failed." };
 }
