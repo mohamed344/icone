@@ -12,6 +12,11 @@ export default async function ChefPage({
 }: {
   searchParams: Promise<{ station?: string }>;
 }) {
+  // Kick the data fetches off immediately so they overlap the auth check
+  // (RLS still gates them, and requireRole gates the render). These reads don't
+  // depend on the resolved profile, so waiting on auth first just adds a hop.
+  const dataP = Promise.all([getChefCartons(), getWaitingByStep()]);
+
   await requireRole(["chef_de_ligne"]);
 
   // A supervisor may act at ANY station (see isSupervisor / guardStation), so the
@@ -26,7 +31,7 @@ export default async function ChefPage({
   const station: WorkflowStage = requested && stages.includes(requested) ? requested : stages[0];
 
   // Carton QC#2 decisions + the codes still waiting at each step.
-  const [cartons, waiting] = await Promise.all([getChefCartons(), getWaitingByStep()]);
+  const [cartons, waiting] = await dataP;
 
   return (
     <>

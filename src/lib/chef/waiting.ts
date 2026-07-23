@@ -11,14 +11,26 @@ export interface StepWaiting {
   entity: "item" | "box" | "carton";
 }
 
+type Db = Awaited<ReturnType<typeof createClient>>;
+
 /**
  * For each of the 11 steps, the codes currently waiting there to be passed to
  * the next step. Entity differs by stage: item serials (steps 1-2, 4-9), box
  * codes (step 3), carton codes (steps 10-11). Codes are capped per step.
+ *
+ * The set math runs in Postgres via the `waiting_overview` RPC (one round-trip,
+ * tiny payload). If that function isn't present yet — or errors — we fall back
+ * to computing it in Node so the page keeps working.
  */
 export async function getWaitingByStep(cap = 200): Promise<StepWaiting[]> {
   const supabase = await createClient();
+  const { data, error } = await supabase.rpc("waiting_overview", { p_cap: cap });
+  if (!error && Array.isArray(data)) return data as StepWaiting[];
+  return waitingByStepInNode(supabase, cap);
+}
 
+/** JS fallback: pulls the raw rows and computes the waiting sets in Node. */
+async function waitingByStepInNode(supabase: Db, cap: number): Promise<StepWaiting[]> {
   const [unitsRes, ccRes, otpRes, openBoxRes, awaitingBoxRes, receptionBoxRes, qc2Res, stockRes, linksRes] = await Promise.all([
     // Steps 5-9: individually-tracked cartes by their current stage.
     supabase.from("pipeline_units").select("serial, current_stage").eq("status", "active").in("current_stage", UNIT_STAGES).limit(10000),
