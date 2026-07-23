@@ -10,10 +10,9 @@ import { notFoundMessage } from "@/lib/scan/locate";
 import type { WorkflowStage } from "@/lib/workflow";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { ToolScanField } from "./ToolScanField";
-import { Boxes, Loader2, CheckCircle2, AlertCircle, ScanLine, PackageCheck } from "lucide-react";
+import { CheckCircle2, AlertCircle, ScanLine } from "lucide-react";
 
 export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; initialQueue: QcBox[] }) {
   const t = useT();
@@ -21,7 +20,7 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
   const { onAny } = useNotifications();
 
   const [queue, setQueue] = useState<QcBox[]>(initialQueue);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [, setBusyId] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [, startPass] = useTransition();
@@ -116,40 +115,6 @@ export function StageScanner({ stage, initialQueue }: { stage: WorkflowStage; in
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
-          )}
-        </GlassCard>
-
-        {/* Queue */}
-        <GlassCard padded={false} className="overflow-hidden">
-          <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
-            <h3 className="font-display font-semibold text-foreground">{t("stagework.queue")}</h3>
-            <button onClick={refresh} className="ring-accent rounded-lg px-2 py-1 text-xs text-muted hover:text-[var(--accent)]">
-              {t("qc1.refresh")}
-            </button>
-          </div>
-          {queue.length === 0 ? (
-            <div className="py-10 text-center text-sm text-faint">{t("stagework.empty")}</div>
-          ) : (
-            <ul className="max-h-[28rem] divide-y divide-[var(--border)] overflow-y-auto">
-              {queue.map((b) => (
-                <li key={b.id} className="flex items-center gap-3 px-4 py-3">
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                    <Boxes className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-sm text-foreground">{b.boxCode ?? `#${b.boxNumber}`}</div>
-                    <div className="text-xs text-faint">
-                      {b.count} {t("otp.units")}
-                      {b.product ? ` · ${b.product}` : ""}
-                    </div>
-                  </div>
-                  <Button size="sm" onClick={() => pass(b)} disabled={busyId === b.id}>
-                    {busyId === b.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
-                    {t("stagework.pass")}
-                  </Button>
-                </li>
-              ))}
-            </ul>
           )}
         </GlassCard>
       </div>
