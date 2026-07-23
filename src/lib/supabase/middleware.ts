@@ -31,10 +31,11 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // IMPORTANT: Do not run code between createServerClient and getUser().
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // IMPORTANT: Do not run code between createServerClient and the identity check.
+  // getClaims() verifies the JWT locally (cached JWKS) and refreshes the session
+  // via getSession() when needed — no Auth-server round-trip on every request.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const user = claimsData?.claims ? { id: claimsData.claims.sub } : null;
 
   const path = request.nextUrl.pathname;
   const isAuthRoute = AUTH_ROUTES.has(path);

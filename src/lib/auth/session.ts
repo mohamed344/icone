@@ -27,22 +27,32 @@ export interface SessionUser {
 /**
  * Current user + profile, or null if not signed in. Memoized per request with
  * React `cache()` so repeated calls within one server action / render collapse
- * to a single `auth.getUser()` + `profiles` lookup (avoids duplicate round-trips).
+ * to a single identity check + `profiles` lookup (avoids duplicate round-trips).
+ *
+ * Identity comes from `getClaims()`, which verifies the JWT locally against the
+ * project's asymmetric signing key (cached JWKS) instead of a network round-trip
+ * to the Auth server on every call. It falls back to a verified `getUser()` only
+ * when local verification isn't possible (symmetric keys), so it is never less
+ * secure — just faster on the hot path.
  */
 export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const claims = claimsData?.claims;
+  const userId = claims?.sub;
+  if (!userId) return null;
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("id, full_name, employee_code, role, line_id, station, allowed_stations, permissions, status")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
-  return { userId: user.id, email: user.email ?? null, profile: (profile as Profile) ?? null };
+  return {
+    userId,
+    email: (typeof claims.email === "string" ? claims.email : null),
+    profile: (profile as Profile) ?? null,
+  };
 });
 
 /** Where each role lands after login. */

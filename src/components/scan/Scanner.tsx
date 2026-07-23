@@ -144,7 +144,17 @@ export function Scanner({ stages }: ScannerProps) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    if (e.key === "Enter") scheduleFinalize();
+    if (e.key !== "Enter") return;
+    if (enableQr) {
+      // A QR payload can arrive as several Enter-separated lines — wait for the
+      // scanner to go idle before reading the whole textarea.
+      scheduleFinalize();
+    } else {
+      // Single-line barcode: the Enter terminator means the scan is complete.
+      // Submit immediately instead of waiting out the idle debounce.
+      e.preventDefault();
+      finalize();
+    }
   }
 
   return (

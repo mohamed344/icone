@@ -4,7 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionUser, type WorkflowStage } from "@/lib/auth/session";
 import { roleCan } from "@/lib/auth/permissions";
 import { getEnabledStages } from "@/lib/auth/steps";
-import { WORKFLOW_STAGES, isSupervisor, type EntityType } from "@/lib/workflow";
+import { authorizeScan } from "@/lib/scan/guard";
+import { WORKFLOW_STAGES, type EntityType } from "@/lib/workflow";
 
 export type { EntityType } from "@/lib/workflow";
 
@@ -53,75 +54,69 @@ export async function locateCode(code: string): Promise<{ stage: WorkflowStage |
   if (!c) return { stage: null };
   const supabase = await createClient();
 
-  // 1) A per-unit carte, by its serial — or by its linked dimo.
-  let serial = c;
-  const unitBySerial = await supabase
-    .from("pipeline_units")
-    .select("current_stage")
-    .eq("serial", c)
-    .maybeSingle();
-  let unitStage = (unitBySerial.data as { current_stage: WorkflowStage | null } | null)?.current_stage ?? null;
-  if (!unitBySerial.data) {
-    const { data: link } = await supabase
-      .from("carte_dimo_links")
-      .select("carte_code")
-      .eq("dimo_code", c)
+  type Stage = WorkflowStage | null;
+  const unitBy = (serial: string) =>
+    supabase.from("pipeline_units").select("current_stage").eq("serial", serial).maybeSingle();
+  const itemBy = (serial: string) =>
+    supabase.from("items").select("current_stage").eq("serial_number", serial).maybeSingle();
+  const lastBy = (serial: string) =>
+    supabase
+      .from("scan_events")
+      .select("stage")
+      .eq("code", serial)
+      .order("scanned_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
-    if (link) {
-      serial = (link as { carte_code: string }).carte_code;
-      const { data: u } = await supabase
-        .from("pipeline_units")
-        .select("current_stage")
-        .eq("serial", serial)
-        .maybeSingle();
-      unitStage = (u as { current_stage: WorkflowStage | null } | null)?.current_stage ?? null;
-    }
-  }
+
+  // First pass: every lookup keyed on the raw code, all in one parallel batch
+  // (each column is unique/indexed, so these are cheap seeks).
+  const [unitRes, linkRes, cartonRes, boxRes, itemRes0, lastRes0] = await Promise.all([
+    unitBy(c),
+    supabase.from("carte_dimo_links").select("carte_code").eq("dimo_code", c).maybeSingle(),
+    supabase.from("pipeline_cartons").select("current_stage").eq("code", c).maybeSingle(),
+    supabase.from("otp_boxes").select("current_stage, qc_state, status").eq("box_code", c).maybeSingle(),
+    itemBy(c),
+    lastBy(c),
+  ]);
+
+  // 1) A per-unit carte, by its own serial.
+  const unitStage = (unitRes.data as { current_stage: Stage } | null)?.current_stage ?? null;
   if (unitStage) return { stage: unitStage };
 
-  // 1b) A PCBA article, by its serial — its current_stage is where it waits next
-  //     (e.g. a serial that finished Scan PCBA sits at otp_validation).
-  const { data: item } = await supabase
-    .from("items")
-    .select("current_stage")
-    .eq("serial_number", serial)
-    .maybeSingle();
-  if ((item as { current_stage: WorkflowStage | null } | null)?.current_stage) {
-    return { stage: (item as { current_stage: WorkflowStage }).current_stage };
+  // 1a) Otherwise the code may be a dimo linked to a carte — re-resolve on the
+  //     carte's serial (unit / item / last scan all key on it).
+  let item = itemRes0.data as { current_stage: Stage } | null;
+  let lastStage = (lastRes0.data as { stage: WorkflowStage } | null)?.stage ?? null;
+  const link = linkRes.data as { carte_code: string } | null;
+  if (!unitRes.data && link) {
+    const [uRes, iRes, lRes] = await Promise.all([
+      unitBy(link.carte_code),
+      itemBy(link.carte_code),
+      lastBy(link.carte_code),
+    ]);
+    const linkedUnitStage = (uRes.data as { current_stage: Stage } | null)?.current_stage ?? null;
+    if (linkedUnitStage) return { stage: linkedUnitStage };
+    item = iRes.data as { current_stage: Stage } | null;
+    lastStage = (lRes.data as { stage: WorkflowStage } | null)?.stage ?? null;
   }
+
+  // 1b) A PCBA article — its current_stage is where it waits next.
+  if (item?.current_stage) return { stage: item.current_stage };
 
   // 2) A carton, by its scannable code.
-  const { data: carton } = await supabase
-    .from("pipeline_cartons")
-    .select("current_stage")
-    .eq("code", c)
-    .maybeSingle();
-  if ((carton as { current_stage: WorkflowStage | null } | null)?.current_stage) {
-    return { stage: (carton as { current_stage: WorkflowStage }).current_stage };
-  }
+  const carton = cartonRes.data as { current_stage: Stage } | null;
+  if (carton?.current_stage) return { stage: carton.current_stage };
 
   // 3) A box, by its code — resolve its live location from stage/qc_state/status.
-  const { data: box } = await supabase
-    .from("otp_boxes")
-    .select("current_stage, qc_state, status")
-    .eq("box_code", c)
-    .maybeSingle();
+  const box = boxRes.data as { current_stage: Stage; qc_state: string | null; status: string | null } | null;
   if (box) {
-    const b = box as { current_stage: WorkflowStage | null; qc_state: string | null; status: string | null };
-    if (b.current_stage) return { stage: b.current_stage };
-    if (b.qc_state === "awaiting" || b.qc_state === "rework") return { stage: "qc1_box" };
-    if (b.status === "open") return { stage: "otp_validation" };
+    if (box.current_stage) return { stage: box.current_stage };
+    if (box.qc_state === "awaiting" || box.qc_state === "rework") return { stage: "qc1_box" };
+    if (box.status === "open") return { stage: "otp_validation" };
   }
 
   // 4) Fallback: the code's most recent scan_events stage.
-  const { data: last } = await supabase
-    .from("scan_events")
-    .select("stage")
-    .eq("code", serial)
-    .order("scanned_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return { stage: (last as { stage: WorkflowStage } | null)?.stage ?? null };
+  return { stage: lastStage };
 }
 
 /**
@@ -158,40 +153,42 @@ export async function recordScan(input: ScanInput): Promise<ScanResult> {
   const code = input.code?.trim();
   if (!code) return { error: "Empty code." };
 
-  const session = await getSessionUser();
-  if (!session?.profile) return { error: "Not authenticated." };
+  // Fire the station-config read immediately; it is independent of the caller
+  // and overlaps the auth check below instead of running after it.
+  const enabledStagesP = getEnabledStages();
 
-  const { profile, userId } = session;
-  if (!(await roleCan(profile.role, "scan"))) {
-    return { error: "Your role doesn't have permission to scan." };
+  const guard = await authorizeScan(input.stage);
+  if (!guard.ok) {
+    void enabledStagesP; // settled independently; nothing to do on the error path
+    return { error: guard.error };
   }
-  // Supervisors (admin, chef de ligne) may act at any station.
-  if (!isSupervisor(profile.role)) {
-    if (profile.allowed_stations?.length && !profile.allowed_stations.includes(input.stage)) {
-      return { error: "This station is not assigned to you." };
-    }
-    if (!profile.allowed_stations?.length) {
-      return { error: "No station assigned to your account. Ask an admin." };
-    }
-  }
+  const { profile, userId, supabase } = guard;
 
-  const supabase = await createClient();
-  const enabledSet = new Set(await getEnabledStages());
-
-  // ---- Sequential enforcement: a product advances 1 → 11 without skipping.
-  // Disabled steps are auto-skipped; bypass_sequence (and admin) may scan freely.
-  const canBypass = await roleCan(profile.role, "bypass_sequence");
-  if (!canBypass) {
-    if (!enabledSet.has(input.stage)) return { reason: "step_off" };
-
-    const { data: last } = await supabase
+  // Remaining reads are independent → they resolve concurrently.
+  // `bypass_sequence` reuses the role_settings row already cached by authorizeScan.
+  // The last-event lookup is served by idx_scan_events_code_time (an index seek,
+  // not a full audit-log scan). Promise.resolve kicks off the lazy query builder.
+  const lastEventP = Promise.resolve(
+    supabase
       .from("scan_events")
       .select("stage")
       .eq("code", code)
       .order("scanned_at", { ascending: false })
       .limit(1)
-      .maybeSingle();
+      .maybeSingle(),
+  );
+  const [enabledStages, canBypass] = await Promise.all([
+    enabledStagesP,
+    roleCan(profile.role, "bypass_sequence"),
+  ]);
+  const enabledSet = new Set(enabledStages);
 
+  // ---- Sequential enforcement: a product advances 1 → 11 without skipping.
+  // Disabled steps are auto-skipped; bypass_sequence (and admin) may scan freely.
+  if (!canBypass) {
+    if (!enabledSet.has(input.stage)) return { reason: "step_off" };
+
+    const { data: last } = await lastEventP;
     const lastStage = last?.stage as WorkflowStage | undefined;
     const startPos = lastStage ? WORKFLOW_STAGES.indexOf(lastStage) : -1;
 

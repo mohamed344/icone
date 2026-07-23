@@ -3,10 +3,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSessionUser } from "@/lib/auth/session";
-import { roleCan } from "@/lib/auth/permissions";
 import { nextEnabledStage } from "@/lib/auth/steps";
+import { authorizeScan } from "@/lib/scan/guard";
 import { notify, operatorIdsAtStage } from "@/lib/notify";
-import { isSupervisor, type WorkflowStage } from "@/lib/workflow";
+import { type WorkflowStage } from "@/lib/workflow";
 
 const STAGE: WorkflowStage = "container_creation";
 
@@ -104,24 +104,9 @@ export async function registerArticle(input: {
   const serial = input.serial?.trim();
   if (!serial) return { error: "Empty serial." };
 
-  const session = await getSessionUser();
-  if (!session?.profile) return { error: "Not authenticated." };
-
-  const { profile, userId } = session;
-  if (!(await roleCan(profile.role, "scan"))) {
-    return { error: "Your role doesn't have permission to scan." };
-  }
-  // Supervisors (admin, chef de ligne) may act at any station.
-  if (!isSupervisor(profile.role)) {
-    if (profile.allowed_stations?.length && !profile.allowed_stations.includes(STAGE)) {
-      return { error: "This station is not assigned to you." };
-    }
-    if (!profile.allowed_stations?.length) {
-      return { error: "No station assigned to your account. Ask an admin." };
-    }
-  }
-
-  const supabase = await createClient();
+  const guard = await authorizeScan(STAGE);
+  if (!guard.ok) return { error: guard.error };
+  const { userId, supabase } = guard;
 
   // Already registered? Re-use it unless it already finished PCBA (→ at OTP).
   const { data: existing } = await supabase
@@ -179,33 +164,19 @@ export async function recordPcbaPass(input: {
   const serial = input.serial?.trim();
   if (!serial) return { error: "Empty serial." };
 
-  const session = await getSessionUser();
-  if (!session?.profile) return { error: "Not authenticated." };
-  const { profile, userId } = session;
-  if (!(await roleCan(profile.role, "scan"))) {
-    return { error: "Your role doesn't have permission to scan." };
-  }
-  if (!isSupervisor(profile.role)) {
-    if (profile.allowed_stations?.length && !profile.allowed_stations.includes(STAGE)) {
-      return { error: "This station is not assigned to you." };
-    }
-    if (!profile.allowed_stations?.length) {
-      return { error: "No station assigned to your account. Ask an admin." };
-    }
-  }
-
-  const supabase = await createClient();
+  const guard = await authorizeScan(STAGE);
+  if (!guard.ok) return { error: guard.error };
+  const { userId, supabase } = guard;
   const admin = createAdminClient();
 
+  // The origin-event guard and the "where does it go next" lookup are
+  // independent → resolve them together.
+  const [doneRes, next] = await Promise.all([
+    supabase.from("scan_events").select("id").eq("code", serial).eq("stage", STAGE).limit(1).maybeSingle(),
+    nextEnabledStage(STAGE),
+  ]);
   // Already completed PCBA? (an origin scan event exists) → reject cleanly.
-  const { data: done } = await supabase
-    .from("scan_events")
-    .select("id")
-    .eq("code", serial)
-    .eq("stage", STAGE)
-    .limit(1)
-    .maybeSingle();
-  if (done) return { reason: "already_done" };
+  if (doneRes.data) return { reason: "already_done" };
 
   // Write the single origin event — this is what lets the unit pass to OTP.
   const { error } = await supabase.from("scan_events").insert({
@@ -219,7 +190,6 @@ export async function recordPcbaPass(input: {
   if (error) return { error: error.message };
 
   // Advance the article and notify the next station's operators.
-  const next = await nextEnabledStage(STAGE);
   await admin.from("items").update({ current_stage: next }).eq("serial_number", serial);
   if (next) await notify(await operatorIdsAtStage(next), "box_arrived", null, serial, undefined, next);
 
